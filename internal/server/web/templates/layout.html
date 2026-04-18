@@ -1,0 +1,33 @@
+{{define "layout_start"}}
+<!doctype html>
+<html lang="en" data-theme="{{.Theme}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  
+  {{if .CSRFToken}}<meta name="csrf-token" content="{{.CSRFToken}}">{{end}}
+  <title>{{.Title}} - s000</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/assets/app.js" defer></script>
+  
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">s000</div>
+    <nav>
+      <a href="/app">Dashboard</a>
+      <a href="/app/buckets">Buckets</a>
+      <a href="/app/uploads">Uploads</a>
+      <a href="/app/settings">Settings</a>
+      <a href="/app/audit">Audit</a>
+    </nav>
+  </header>
+  <main class="container">
+{{end}}
+
+{{define "layout_end"}}
+  </main>
+</body>
+</html>
+{{end}}

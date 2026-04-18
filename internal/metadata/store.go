@@ -1,0 +1,775 @@
+package metadata
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+var (
+	// ErrNotFound indicates that a metadata entity was not found.
+	ErrNotFound = errors.New("metadata not found")
+	// ErrConflict indicates that a metadata entity already exists.
+	ErrConflict = errors.New("metadata conflict")
+)
+
+// TxStore is the metadata store surface available inside a transaction.
+type TxStore interface {
+	CreateBucket(ctx context.Context, bucket Bucket) error
+	DeleteBucket(ctx context.Context, bucket string) error
+	UpdateBucketVersioning(ctx context.Context, bucket string, status string) error
+	PutObjectVersion(ctx context.Context, version ObjectVersion) error
+	DeleteObject(ctx context.Context, bucket string, key string, versionID string, at time.Time) error
+	CreateMultipartUpload(ctx context.Context, upload MultipartUpload) error
+	DeleteMultipartUpload(ctx context.Context, uploadID string) error
+	UpsertMultipartPart(ctx context.Context, part MultipartPart) error
+	UpsertCredentialRecord(ctx context.Context, record CredentialRecord) error
+}
+
+// Store is the metadata backend interface used by the application.
+type Store interface {
+	TxStore
+	GetBucket(ctx context.Context, name string) (Bucket, error)
+	ListBuckets(ctx context.Context) ([]Bucket, error)
+	PutBucketWebsite(ctx context.Context, cfg BucketWebsiteConfig) error
+	GetBucketWebsite(ctx context.Context, bucket string) (BucketWebsiteConfig, error)
+	DeleteBucketWebsite(ctx context.Context, bucket string) error
+	PutBucketCORS(ctx context.Context, cfg BucketCORSConfig) error
+	GetBucketCORS(ctx context.Context, bucket string) (BucketCORSConfig, error)
+	DeleteBucketCORS(ctx context.Context, bucket string) error
+	PutBucketPolicy(ctx context.Context, cfg BucketPolicy) error
+	GetBucketPolicy(ctx context.Context, bucket string) (BucketPolicy, error)
+	DeleteBucketPolicy(ctx context.Context, bucket string) error
+	PutBucketPublicAccessBlock(ctx context.Context, cfg BucketPublicAccessBlock) error
+	GetBucketPublicAccessBlock(ctx context.Context, bucket string) (BucketPublicAccessBlock, error)
+	DeleteBucketPublicAccessBlock(ctx context.Context, bucket string) error
+	ListObjects(ctx context.Context, bucket string) ([]ObjectVersion, error)
+	GetLatestObjectVersion(ctx context.Context, bucket string, key string) (ObjectVersion, error)
+	GetObjectVersion(ctx context.Context, bucket string, key string, versionID string) (ObjectVersion, error)
+	DeleteAllObjectVersions(ctx context.Context, bucket string, key string) ([]ObjectVersion, error)
+	ListMultipartUploads(ctx context.Context, bucket string, prefix string) ([]MultipartUpload, error)
+	GetMultipartUpload(ctx context.Context, uploadID string) (MultipartUpload, []MultipartPart, error)
+	GetCredentialRecord(ctx context.Context, accessKeyID string) (CredentialRecord, error)
+	RunInTx(ctx context.Context, fn func(tx TxStore) error) error
+	ValidateConsistency(ctx context.Context) ([]ConsistencyIssue, error)
+	RepairConsistency(ctx context.Context) (int, error)
+}
+
+// NewStore creates a metadata store for the configured backend.
+func NewStore(cfg Config) (Store, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	if cfg.NowProvider == nil {
+		cfg.NowProvider = func() time.Time { return time.Now().UTC() }
+	}
+
+	switch cfg.Backend {
+	case BackendSQLite:
+		return newMemoryBackedStore(cfg, "sqlite"), nil
+	case BackendLibSQL:
+		return newMemoryBackedStore(cfg, "libsql"), nil
+	case BackendPostgreSQL:
+		return newMemoryBackedStore(cfg, "postgresql"), nil
+	case BackendMariaDB:
+		return newMemoryBackedStore(cfg, "mariadb"), nil
+	case BackendValkey:
+		return newMemoryBackedStore(cfg, "valkey"), nil
+	default:
+		return nil, fmt.Errorf("unsupported metadata backend %q", cfg.Backend)
+	}
+}
+
+type objectKey struct {
+	bucket string
+	key    string
+}
+
+type memoryState struct {
+	buckets      map[string]Bucket
+	objects      map[objectKey][]ObjectVersion
+	multipart    map[string]MultipartUpload
+	parts        map[string]map[int]MultipartPart
+	credentials  map[string]CredentialRecord
+	websites     map[string]BucketWebsiteConfig
+	cors         map[string]BucketCORSConfig
+	policies     map[string]BucketPolicy
+	publicAccess map[string]BucketPublicAccessBlock
+	backendLabel string
+}
+
+type memoryBackedStore struct {
+	mu  sync.RWMutex
+	now func() time.Time
+	st  memoryState
+}
+
+func newMemoryBackedStore(cfg Config, backendLabel string) *memoryBackedStore {
+	return &memoryBackedStore{
+		now: cfg.NowProvider,
+		st: memoryState{
+			buckets:      make(map[string]Bucket),
+			objects:      make(map[objectKey][]ObjectVersion),
+			multipart:    make(map[string]MultipartUpload),
+			parts:        make(map[string]map[int]MultipartPart),
+			credentials:  make(map[string]CredentialRecord),
+			websites:     make(map[string]BucketWebsiteConfig),
+			cors:         make(map[string]BucketCORSConfig),
+			policies:     make(map[string]BucketPolicy),
+			publicAccess: make(map[string]BucketPublicAccessBlock),
+			backendLabel: backendLabel,
+		},
+	}
+}
+
+// CreateBucket creates bucket metadata.
+func (s *memoryBackedStore) CreateBucket(_ context.Context, bucket Bucket) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return createBucket(&s.st, bucket)
+}
+
+// UpdateBucketVersioning updates one bucket versioning state.
+func (s *memoryBackedStore) UpdateBucketVersioning(_ context.Context, bucket string, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.st.buckets[bucket]
+	if !ok {
+		return ErrNotFound
+	}
+	b.VersioningStatus = status
+	s.st.buckets[bucket] = b
+	return nil
+}
+
+// DeleteBucket deletes one bucket metadata record.
+func (s *memoryBackedStore) DeleteBucket(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.buckets, bucket)
+	delete(s.st.websites, bucket)
+	delete(s.st.cors, bucket)
+	delete(s.st.policies, bucket)
+	delete(s.st.publicAccess, bucket)
+	return nil
+}
+
+// GetBucket fetches one bucket by name.
+func (s *memoryBackedStore) GetBucket(_ context.Context, name string) (Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	b, ok := s.st.buckets[name]
+	if !ok {
+		return Bucket{}, ErrNotFound
+	}
+	return b, nil
+}
+
+// ListBuckets returns all buckets.
+func (s *memoryBackedStore) ListBuckets(_ context.Context) ([]Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Bucket, 0, len(s.st.buckets))
+	for _, bucket := range s.st.buckets {
+		out = append(out, bucket)
+	}
+	return out, nil
+}
+
+// PutBucketWebsite creates or updates website config for one bucket.
+func (s *memoryBackedStore) PutBucketWebsite(_ context.Context, cfg BucketWebsiteConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.websites[cfg.Bucket] = cfg
+	return nil
+}
+
+// GetBucketWebsite fetches website config for one bucket.
+func (s *memoryBackedStore) GetBucketWebsite(_ context.Context, bucket string) (BucketWebsiteConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.websites[bucket]
+	if !ok {
+		return BucketWebsiteConfig{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+// DeleteBucketWebsite removes website config for one bucket.
+func (s *memoryBackedStore) DeleteBucketWebsite(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.websites[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.websites, bucket)
+	return nil
+}
+
+// PutBucketCORS creates or updates CORS config for one bucket.
+func (s *memoryBackedStore) PutBucketCORS(_ context.Context, cfg BucketCORSConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.cors[cfg.Bucket] = cfg
+	return nil
+}
+
+// GetBucketCORS fetches CORS config for one bucket.
+func (s *memoryBackedStore) GetBucketCORS(_ context.Context, bucket string) (BucketCORSConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.cors[bucket]
+	if !ok {
+		return BucketCORSConfig{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+// DeleteBucketCORS removes CORS config for one bucket.
+func (s *memoryBackedStore) DeleteBucketCORS(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.cors[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.cors, bucket)
+	return nil
+}
+
+// PutBucketPolicy creates or updates policy for one bucket.
+func (s *memoryBackedStore) PutBucketPolicy(_ context.Context, cfg BucketPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.policies[cfg.Bucket] = cfg
+	return nil
+}
+
+// GetBucketPolicy fetches policy for one bucket.
+func (s *memoryBackedStore) GetBucketPolicy(_ context.Context, bucket string) (BucketPolicy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.policies[bucket]
+	if !ok {
+		return BucketPolicy{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+// DeleteBucketPolicy removes policy for one bucket.
+func (s *memoryBackedStore) DeleteBucketPolicy(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.policies[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.policies, bucket)
+	return nil
+}
+
+// PutBucketPublicAccessBlock creates or updates public access block for one bucket.
+func (s *memoryBackedStore) PutBucketPublicAccessBlock(_ context.Context, cfg BucketPublicAccessBlock) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.publicAccess[cfg.Bucket] = cfg
+	return nil
+}
+
+// GetBucketPublicAccessBlock fetches public access block for one bucket.
+func (s *memoryBackedStore) GetBucketPublicAccessBlock(_ context.Context, bucket string) (BucketPublicAccessBlock, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.publicAccess[bucket]
+	if !ok {
+		return BucketPublicAccessBlock{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+// DeleteBucketPublicAccessBlock removes public access block for one bucket.
+func (s *memoryBackedStore) DeleteBucketPublicAccessBlock(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.publicAccess[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.publicAccess, bucket)
+	return nil
+}
+
+// ListObjects lists latest visible versions for one bucket.
+func (s *memoryBackedStore) ListObjects(_ context.Context, bucket string) ([]ObjectVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]ObjectVersion, 0)
+	for key, versions := range s.st.objects {
+		if key.bucket != bucket || len(versions) == 0 {
+			continue
+		}
+		latest := versions[len(versions)-1]
+		if latest.DeleteMarker {
+			continue
+		}
+		result = append(result, latest)
+	}
+	return result, nil
+}
+
+// PutObjectVersion inserts one object version row.
+func (s *memoryBackedStore) PutObjectVersion(_ context.Context, version ObjectVersion) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	putObjectVersion(&s.st, version)
+	return nil
+}
+
+// GetLatestObjectVersion returns the latest version for a key.
+func (s *memoryBackedStore) GetLatestObjectVersion(_ context.Context, bucket string, key string) (ObjectVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	versions := s.st.objects[objectKey{bucket: bucket, key: key}]
+	if len(versions) == 0 {
+		return ObjectVersion{}, ErrNotFound
+	}
+	return versions[len(versions)-1], nil
+}
+
+// GetObjectVersion returns a specific version or latest when versionID is empty.
+func (s *memoryBackedStore) GetObjectVersion(ctx context.Context, bucket string, key string, versionID string) (ObjectVersion, error) {
+	if versionID == "" {
+		return s.GetLatestObjectVersion(ctx, bucket, key)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	versions := s.st.objects[objectKey{bucket: bucket, key: key}]
+	for _, v := range versions {
+		if v.VersionID == versionID {
+			return v, nil
+		}
+	}
+	return ObjectVersion{}, ErrNotFound
+}
+
+// DeleteObject appends a delete marker version.
+func (s *memoryBackedStore) DeleteObject(ctx context.Context, bucket string, key string, versionID string, at time.Time) error {
+	return s.PutObjectVersion(ctx, ObjectVersion{
+		Bucket:       bucket,
+		Key:          key,
+		VersionID:    versionID,
+		DeleteMarker: true,
+		CreatedAt:    at,
+	})
+}
+
+// DeleteAllObjectVersions removes all versions for a key and returns removed versions.
+func (s *memoryBackedStore) DeleteAllObjectVersions(_ context.Context, bucket string, key string) ([]ObjectVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := objectKey{bucket: bucket, key: key}
+	versions := s.st.objects[k]
+	if len(versions) == 0 {
+		return nil, ErrNotFound
+	}
+	delete(s.st.objects, k)
+	return append([]ObjectVersion(nil), versions...), nil
+}
+
+// CreateMultipartUpload creates multipart upload metadata.
+func (s *memoryBackedStore) CreateMultipartUpload(_ context.Context, upload MultipartUpload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.st.multipart[upload.UploadID]; exists {
+		return ErrConflict
+	}
+	s.st.multipart[upload.UploadID] = upload
+	return nil
+}
+
+// DeleteMultipartUpload deletes multipart upload metadata and parts.
+func (s *memoryBackedStore) DeleteMultipartUpload(_ context.Context, uploadID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.multipart[uploadID]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.multipart, uploadID)
+	delete(s.st.parts, uploadID)
+	return nil
+}
+
+// UpsertMultipartPart creates or updates a multipart part row.
+func (s *memoryBackedStore) UpsertMultipartPart(_ context.Context, part MultipartPart) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.st.multipart[part.UploadID]; !exists {
+		return ErrNotFound
+	}
+	if _, ok := s.st.parts[part.UploadID]; !ok {
+		s.st.parts[part.UploadID] = make(map[int]MultipartPart)
+	}
+	s.st.parts[part.UploadID][part.PartNumber] = part
+	return nil
+}
+
+// GetMultipartUpload returns upload metadata and sorted part list.
+func (s *memoryBackedStore) GetMultipartUpload(_ context.Context, uploadID string) (MultipartUpload, []MultipartPart, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	upload, ok := s.st.multipart[uploadID]
+	if !ok {
+		return MultipartUpload{}, nil, ErrNotFound
+	}
+	partMap := s.st.parts[uploadID]
+	partNumbers := make([]int, 0, len(partMap))
+	for partNo := range partMap {
+		partNumbers = append(partNumbers, partNo)
+	}
+	sort.Ints(partNumbers)
+	parts := make([]MultipartPart, 0, len(partMap))
+	for _, partNo := range partNumbers {
+		parts = append(parts, partMap[partNo])
+	}
+	return upload, parts, nil
+}
+
+// ListMultipartUploads lists multipart uploads by bucket/prefix.
+func (s *memoryBackedStore) ListMultipartUploads(_ context.Context, bucket string, prefix string) ([]MultipartUpload, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, ok := s.st.buckets[bucket]; !ok {
+		return nil, ErrNotFound
+	}
+	out := make([]MultipartUpload, 0)
+	for _, upload := range s.st.multipart {
+		if upload.Bucket != bucket {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(upload.Key, prefix) {
+			continue
+		}
+		out = append(out, upload)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Key == out[j].Key {
+			return out[i].UploadID < out[j].UploadID
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+// UpsertCredentialRecord creates or updates metadata credential state.
+func (s *memoryBackedStore) UpsertCredentialRecord(_ context.Context, record CredentialRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.credentials[record.AccessKeyID] = record
+	return nil
+}
+
+// GetCredentialRecord gets one credential metadata record.
+func (s *memoryBackedStore) GetCredentialRecord(_ context.Context, accessKeyID string) (CredentialRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rec, ok := s.st.credentials[accessKeyID]
+	if !ok {
+		return CredentialRecord{}, ErrNotFound
+	}
+	return rec, nil
+}
+
+// RunInTx runs metadata operations in an atomic transaction.
+func (s *memoryBackedStore) RunInTx(ctx context.Context, fn func(tx TxStore) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	clone := cloneState(s.st)
+	tx := &memoryTx{st: &clone}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	s.st = clone
+	_ = ctx
+	return nil
+}
+
+// ValidateConsistency returns consistency issues for current metadata.
+func (s *memoryBackedStore) ValidateConsistency(_ context.Context) ([]ConsistencyIssue, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return validateState(s.st), nil
+}
+
+// RepairConsistency repairs known consistency issues and returns repair count.
+func (s *memoryBackedStore) RepairConsistency(_ context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return repairState(&s.st), nil
+}
+
+type memoryTx struct {
+	st *memoryState
+}
+
+func (t *memoryTx) CreateBucket(_ context.Context, bucket Bucket) error {
+	return createBucket(t.st, bucket)
+}
+
+func (t *memoryTx) DeleteBucket(_ context.Context, bucket string) error {
+	if _, ok := t.st.buckets[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(t.st.buckets, bucket)
+	delete(t.st.websites, bucket)
+	delete(t.st.cors, bucket)
+	delete(t.st.policies, bucket)
+	delete(t.st.publicAccess, bucket)
+	return nil
+}
+
+func (t *memoryTx) UpdateBucketVersioning(_ context.Context, bucket string, status string) error {
+	b, ok := t.st.buckets[bucket]
+	if !ok {
+		return ErrNotFound
+	}
+	b.VersioningStatus = status
+	t.st.buckets[bucket] = b
+	return nil
+}
+
+func (t *memoryTx) PutObjectVersion(_ context.Context, version ObjectVersion) error {
+	putObjectVersion(t.st, version)
+	return nil
+}
+
+func (t *memoryTx) DeleteObject(ctx context.Context, bucket string, key string, versionID string, at time.Time) error {
+	return t.PutObjectVersion(ctx, ObjectVersion{Bucket: bucket, Key: key, VersionID: versionID, DeleteMarker: true, CreatedAt: at})
+}
+
+func (t *memoryTx) CreateMultipartUpload(_ context.Context, upload MultipartUpload) error {
+	if _, exists := t.st.multipart[upload.UploadID]; exists {
+		return ErrConflict
+	}
+	t.st.multipart[upload.UploadID] = upload
+	return nil
+}
+
+func (t *memoryTx) DeleteMultipartUpload(_ context.Context, uploadID string) error {
+	if _, ok := t.st.multipart[uploadID]; !ok {
+		return ErrNotFound
+	}
+	delete(t.st.multipart, uploadID)
+	delete(t.st.parts, uploadID)
+	return nil
+}
+
+func (t *memoryTx) UpsertMultipartPart(_ context.Context, part MultipartPart) error {
+	if _, exists := t.st.multipart[part.UploadID]; !exists {
+		return ErrNotFound
+	}
+	if _, ok := t.st.parts[part.UploadID]; !ok {
+		t.st.parts[part.UploadID] = make(map[int]MultipartPart)
+	}
+	t.st.parts[part.UploadID][part.PartNumber] = part
+	return nil
+}
+
+func (t *memoryTx) UpsertCredentialRecord(_ context.Context, record CredentialRecord) error {
+	t.st.credentials[record.AccessKeyID] = record
+	return nil
+}
+
+func createBucket(st *memoryState, bucket Bucket) error {
+	if bucket.Name == "" {
+		return fmt.Errorf("bucket name is required")
+	}
+	if _, exists := st.buckets[bucket.Name]; exists {
+		return ErrConflict
+	}
+	st.buckets[bucket.Name] = bucket
+	return nil
+}
+
+func putObjectVersion(st *memoryState, version ObjectVersion) {
+	k := objectKey{bucket: version.Bucket, key: version.Key}
+	st.objects[k] = append(st.objects[k], version)
+}
+
+func cloneState(in memoryState) memoryState {
+	out := memoryState{
+		buckets:      make(map[string]Bucket, len(in.buckets)),
+		objects:      make(map[objectKey][]ObjectVersion, len(in.objects)),
+		multipart:    make(map[string]MultipartUpload, len(in.multipart)),
+		parts:        make(map[string]map[int]MultipartPart, len(in.parts)),
+		credentials:  make(map[string]CredentialRecord, len(in.credentials)),
+		websites:     make(map[string]BucketWebsiteConfig, len(in.websites)),
+		cors:         make(map[string]BucketCORSConfig, len(in.cors)),
+		policies:     make(map[string]BucketPolicy, len(in.policies)),
+		publicAccess: make(map[string]BucketPublicAccessBlock, len(in.publicAccess)),
+		backendLabel: in.backendLabel,
+	}
+
+	for k, v := range in.buckets {
+		out.buckets[k] = v
+	}
+	for k, versions := range in.objects {
+		out.objects[k] = append([]ObjectVersion(nil), versions...)
+	}
+	for uploadID, upload := range in.multipart {
+		out.multipart[uploadID] = upload
+	}
+	for uploadID, partMap := range in.parts {
+		cloned := make(map[int]MultipartPart, len(partMap))
+		for partNo, part := range partMap {
+			cloned[partNo] = part
+		}
+		out.parts[uploadID] = cloned
+	}
+	for k, rec := range in.credentials {
+		out.credentials[k] = rec
+	}
+	for k, cfg := range in.websites {
+		out.websites[k] = cfg
+	}
+	for k, cfg := range in.cors {
+		out.cors[k] = cfg
+	}
+	for k, cfg := range in.policies {
+		out.policies[k] = cfg
+	}
+	for k, cfg := range in.publicAccess {
+		out.publicAccess[k] = cfg
+	}
+
+	return out
+}
+
+func validateState(st memoryState) []ConsistencyIssue {
+	issues := make([]ConsistencyIssue, 0)
+
+	for key := range st.objects {
+		if _, ok := st.buckets[key.bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_object_versions",
+				Message: fmt.Sprintf("object versions exist for missing bucket %q", key.bucket),
+			})
+		}
+	}
+
+	for uploadID, upload := range st.multipart {
+		if _, ok := st.buckets[upload.Bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_multipart_upload",
+				Message: fmt.Sprintf("multipart upload %q references missing bucket %q", uploadID, upload.Bucket),
+			})
+		}
+	}
+
+	for bucket := range st.websites {
+		if _, ok := st.buckets[bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_website_config",
+				Message: fmt.Sprintf("website configuration exists for missing bucket %q", bucket),
+			})
+		}
+	}
+
+	for bucket := range st.cors {
+		if _, ok := st.buckets[bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_cors_config",
+				Message: fmt.Sprintf("cors configuration exists for missing bucket %q", bucket),
+			})
+		}
+	}
+
+	for bucket := range st.policies {
+		if _, ok := st.buckets[bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_bucket_policy",
+				Message: fmt.Sprintf("bucket policy exists for missing bucket %q", bucket),
+			})
+		}
+	}
+
+	for bucket := range st.publicAccess {
+		if _, ok := st.buckets[bucket]; !ok {
+			issues = append(issues, ConsistencyIssue{
+				Code:    "orphan_public_access_block",
+				Message: fmt.Sprintf("public access block exists for missing bucket %q", bucket),
+			})
+		}
+	}
+
+	return issues
+}
+
+func repairState(st *memoryState) int {
+	repaired := 0
+
+	for key := range st.objects {
+		if _, ok := st.buckets[key.bucket]; !ok {
+			delete(st.objects, key)
+			repaired++
+		}
+	}
+
+	for uploadID, upload := range st.multipart {
+		if _, ok := st.buckets[upload.Bucket]; !ok {
+			delete(st.multipart, uploadID)
+			delete(st.parts, uploadID)
+			repaired++
+		}
+	}
+
+	for bucket := range st.websites {
+		if _, ok := st.buckets[bucket]; !ok {
+			delete(st.websites, bucket)
+			repaired++
+		}
+	}
+
+	for bucket := range st.cors {
+		if _, ok := st.buckets[bucket]; !ok {
+			delete(st.cors, bucket)
+			repaired++
+		}
+	}
+
+	for bucket := range st.policies {
+		if _, ok := st.buckets[bucket]; !ok {
+			delete(st.policies, bucket)
+			repaired++
+		}
+	}
+
+	for bucket := range st.publicAccess {
+		if _, ok := st.buckets[bucket]; !ok {
+			delete(st.publicAccess, bucket)
+			repaired++
+		}
+	}
+
+	return repaired
+}

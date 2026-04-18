@@ -1,0 +1,23 @@
+[Unit]
+Description=s000 S3-compatible object storage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=s000
+Group=s000
+WorkingDirectory=/var/lib/s000
+Environment=S000_ADDR=:9000
+Environment=S000_DATA_DIR=/var/lib/s000/data
+Environment=S000_METADATA_BACKEND=sqlite
+Environment=S000_METADATA_DSN=file:/var/lib/s000/data/s000-metadata.db
+Environment=S000_ADMIN_ACCESS_KEY=admin
+Environment=S000_ADMIN_SECRET_KEY=change-me
+ExecStart=/usr/local/bin/s000
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

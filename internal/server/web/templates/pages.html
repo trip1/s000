@@ -1,0 +1,241 @@
+{{define "pages/login"}}
+  {{template "layout_start" .}}
+  <article>
+    <h1>Login</h1>
+    {{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+    <p>Sign in with operator credentials.</p>
+    <form method="post" action="/app/login" aria-label="Login form">
+      <label for="access-key">Access key</label>
+      <input id="access-key" type="text" name="access_key" autocomplete="username" required>
+      <label for="secret-key">Secret key</label>
+      <input id="secret-key" type="password" name="secret_key" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/dashboard"}}
+  {{template "layout_start" .}}
+  <article>
+    <h1>Dashboard</h1>
+    <p>Route map for HTML client scaffolding:</p>
+    <ul>
+      {{range .RouteMap}}<li><code>{{.Path}}</code> - {{.Purpose}}</li>{{end}}
+    </ul>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/buckets"}}
+  {{template "layout_start" .}}
+  <article data-title="Buckets">
+    <h1>Buckets</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+  </article>
+  <article>
+    <form method="post" action="/app/actions/create-bucket" aria-label="Create bucket">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <label for="new-bucket-name">New bucket</label>
+      <input id="new-bucket-name" type="text" name="bucket" required>
+      <button type="submit">Create bucket</button>
+    </form>
+  </article>
+  <div hx-get="/app/partials/buckets" hx-trigger="load" hx-target="#bucket-table">Loading buckets...</div>
+  <div id="bucket-table"></div>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/bucket_detail"}}
+  {{template "layout_start" .}}
+  <article data-title="Bucket Settings">
+    <h1>Bucket: {{.BucketName}}</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    {{if .Bucket}}
+      <dl>
+        <dt>Region</dt><dd>{{.Bucket.Region}}</dd>
+        <dt>Created</dt><dd>{{.Bucket.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</dd>
+      </dl>
+    {{end}}
+  </article>
+  <article>
+    <h2>Versioning</h2>
+    <form method="post" action="/app/actions/update-bucket-versioning" aria-label="Bucket versioning settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label for="versioning-status">Status</label>
+      <select id="versioning-status" name="versioning">
+        <option value="Enabled" {{if and .Bucket (eq .Bucket.VersioningStatus "Enabled")}}selected{{end}}>Enabled</option>
+        <option value="Suspended" {{if or (not .Bucket) (eq .Bucket.VersioningStatus "Suspended")}}selected{{end}}>Suspended</option>
+      </select>
+      <button type="submit">Save versioning</button>
+    </form>
+  </article>
+  <article>
+    <h2>Public Access Block</h2>
+    <form method="post" action="/app/actions/update-bucket-public-access" aria-label="Bucket public access block settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="block_public_acls" {{if .BucketPublicAccess.BlockPublicACLs}}checked{{end}}> Block public ACLs</label>
+      <label><input type="checkbox" name="ignore_public_acls" {{if .BucketPublicAccess.IgnorePublicACLs}}checked{{end}}> Ignore public ACLs</label>
+      <label><input type="checkbox" name="block_public_policy" {{if .BucketPublicAccess.BlockPublicPolicy}}checked{{end}}> Block public policy</label>
+      <label><input type="checkbox" name="restrict_public_buckets" {{if .BucketPublicAccess.RestrictPublicBuckets}}checked{{end}}> Restrict public buckets</label>
+      <button type="submit">Save public access block</button>
+    </form>
+  </article>
+  <article>
+    <h2>Website Hosting</h2>
+    <form method="post" action="/app/actions/update-bucket-website" aria-label="Bucket website settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="website_enabled" {{if .BucketWebsite.Enabled}}checked{{end}}> Enable website hosting</label>
+      <label><input type="checkbox" name="website_public_read" {{if .BucketWebsite.PublicRead}}checked{{end}}> Public read</label>
+      <label for="website-index">Index document</label>
+      <input id="website-index" type="text" name="index_document" value="{{.BucketWebsite.IndexDocument}}" placeholder="index.html">
+      <label for="website-error">Error document</label>
+      <input id="website-error" type="text" name="error_document" value="{{.BucketWebsite.ErrorDocument}}" placeholder="error.html">
+      <label for="website-host">Redirect host</label>
+      <input id="website-host" type="text" name="redirect_all_host" value="{{.BucketWebsite.RedirectAllHost}}" placeholder="www.example.com">
+      <label for="website-protocol">Redirect protocol</label>
+      <input id="website-protocol" type="text" name="redirect_all_protocol" value="{{.BucketWebsite.RedirectAllProtocol}}" placeholder="https">
+      <button type="submit">Save website settings</button>
+    </form>
+  </article>
+  <article>
+    <h2>CORS</h2>
+    <form method="post" action="/app/actions/update-bucket-cors" aria-label="Bucket CORS settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="cors_enabled" {{if .BucketCORS.Enabled}}checked{{end}}> Enable CORS</label>
+      <label for="cors-origins">Allowed origins (comma-separated)</label>
+      <input id="cors-origins" type="text" name="allowed_origins" value="{{.BucketCORS.AllowedOrigins}}" placeholder="https://example.com,https://app.example.com">
+      <label for="cors-methods">Allowed methods (comma-separated)</label>
+      <input id="cors-methods" type="text" name="allowed_methods" value="{{.BucketCORS.AllowedMethods}}" placeholder="GET,PUT,POST">
+      <label for="cors-headers">Allowed headers (comma-separated)</label>
+      <input id="cors-headers" type="text" name="allowed_headers" value="{{.BucketCORS.AllowedHeaders}}" placeholder="Authorization,Content-Type">
+      <label for="cors-expose">Expose headers (comma-separated)</label>
+      <input id="cors-expose" type="text" name="expose_headers" value="{{.BucketCORS.ExposeHeaders}}" placeholder="ETag,x-amz-request-id">
+      <label for="cors-max-age">Max age seconds</label>
+      <input id="cors-max-age" type="number" min="0" name="max_age_seconds" value="{{.BucketCORS.MaxAgeSeconds}}">
+      <button type="submit">Save CORS settings</button>
+    </form>
+  </article>
+  <article>
+    <h2>Bucket Policy</h2>
+    <form method="post" action="/app/actions/update-bucket-policy" aria-label="Bucket policy settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="policy_enabled" {{if .BucketPolicy.Enabled}}checked{{end}}> Enable policy</label>
+      <label for="policy-document">Policy document (JSON)</label>
+      <textarea id="policy-document" name="policy_document" rows="8" placeholder='{"Version":"2012-10-17","Statement":[]}'>{{.BucketPolicy.Document}}</textarea>
+      <button type="submit">Save policy</button>
+    </form>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/objects"}}
+  {{template "layout_start" .}}
+  <article data-title="Objects: {{.BucketName}}">
+    <h1>Object Browser: {{.BucketName}}</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+  </article>
+  <article>
+    <form method="get" action="/app/buckets/{{p .BucketName}}/objects" aria-label="Object list filters">
+      <label for="prefix-filter">Prefix</label>
+      <input id="prefix-filter" type="text" name="prefix" value="{{.Prefix}}" placeholder="photos/2026/">
+      <label for="delimiter-filter">Delimiter</label>
+      <input id="delimiter-filter" type="text" name="delimiter" value="{{.Delimiter}}" placeholder="/">
+      <label for="max-keys-filter">Max keys</label>
+      <input id="max-keys-filter" type="number" min="1" max="1000" name="max-keys" value="{{.MaxKeys}}">
+      <button type="submit">Apply filters</button>
+    </form>
+  </article>
+  <article>
+    <form method="post" action="/app/actions/upload-object" enctype="multipart/form-data" data-upload-form aria-label="Upload object">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label for="upload-key">Object key</label>
+      <input id="upload-key" type="text" name="key" required>
+      <label for="upload-file">File</label>
+      <input id="upload-file" type="file" name="file" required>
+      <button type="submit">Upload</button>
+      <progress id="upload-progress" max="100" value="0" hidden></progress>
+      <p id="upload-status" role="status" aria-live="polite"></p>
+    </form>
+  </article>
+  <div hx-get="/app/partials/objects?bucket={{q .BucketName}}&prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .ContinuationToken}}" hx-trigger="load" hx-target="#object-table">Loading objects...</div>
+  <div id="object-table"></div>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/object_detail"}}
+  {{template "layout_start" .}}
+  <article>
+    <h1>Object Detail</h1>
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    <p><a href="/app/actions/download-object?bucket={{q .BucketName}}&key={{q .ObjectKey}}">Download object</a></p>
+    <form method="post" action="/app/actions/delete-object" aria-label="Delete object">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="key" value="{{.ObjectKey}}">
+      <button type="submit">Delete object</button>
+    </form>
+    <div hx-get="/app/partials/object-metadata?bucket={{q .BucketName}}&key={{q .ObjectKey}}" hx-trigger="load" hx-target="#object-metadata">Loading metadata...</div>
+    <div id="object-metadata"></div>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/uploads"}}
+  {{template "layout_start" .}}
+  <article>
+    <h1>Multipart Uploads</h1>
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    <p>Upload monitoring shell page.</p>
+    <h2>Bucket settings</h2>
+    <ul>
+      {{if not .Buckets}}
+        <li>No buckets found.</li>
+      {{end}}
+      {{range .Buckets}}
+        <li><a href="/app/buckets/{{p .Name}}" aria-label="Open settings for bucket {{.Name}}">&#9881; {{.Name}}</a></li>
+      {{end}}
+    </ul>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/settings"}}
+  {{template "layout_start" .}}
+  <article data-title="Settings">
+    <h1>Settings</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
+    <p>Client and session settings.</p>
+  </article>
+  <article>
+    <form method="post" action="/app/actions/theme" aria-label="Theme settings">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <label for="theme-select">Theme</label>
+      <select id="theme-select" name="theme">
+        {{range .ThemeOptions}}
+          <option value="{{.}}" {{if eq $.Theme .}}selected{{end}}>{{.}}</option>
+        {{end}}
+      </select>
+      <button type="submit">Apply theme</button>
+    </form>
+  </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/audit"}}
+  {{template "layout_start" .}}
+  <article>
+    <h1>Audit Events</h1>
+    <p>Recent audit trail shell page.</p>
+  </article>
+  {{template "layout_end" .}}
+{{end}}

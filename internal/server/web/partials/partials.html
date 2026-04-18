@@ -1,0 +1,87 @@
+{{define "partials/buckets_table"}}
+{{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+<figure>
+  <table>
+    <thead><tr><th>Bucket</th><th>Created</th></tr></thead>
+    <tbody>
+      {{if not .Buckets}}
+        <tr><td colspan="2">No buckets found.</td></tr>
+      {{end}}
+      {{range .Buckets}}
+        <tr>
+          <td><a href="/app/buckets/{{p .Name}}/objects">{{.Name}}</a></td>
+          <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</figure>
+<small>Generated at {{.GeneratedAt}}</small>
+{{end}}
+
+{{define "partials/objects_table"}}
+{{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+<figure>
+  <table>
+    <thead><tr><th>Key</th><th>Size</th><th>Last Modified</th></tr></thead>
+    <tbody>
+      {{range .CommonPrefixes}}
+        <tr>
+          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}">{{.}}</a></td>
+          <td>-</td>
+          <td>prefix</td>
+        </tr>
+      {{end}}
+      {{if not .Objects}}
+        <tr><td colspan="3">No objects found.</td></tr>
+      {{end}}
+      {{range .Objects}}
+        <tr>
+          <td><a href="/app/buckets/{{p $.BucketName}}/objects/{{p .Key}}">{{.Key}}</a></td>
+          <td>{{.Size}}</td>
+          <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</figure>
+{{template "partials/pagination" .}}
+{{end}}
+
+{{define "partials/object_metadata"}}
+{{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+<article>
+  <h2>Metadata</h2>
+  {{if .Object}}
+    <dl>
+      <dt>Bucket</dt><dd>{{.Object.Bucket}}</dd>
+      <dt>Key</dt><dd>{{.Object.Key}}</dd>
+      <dt>Version</dt><dd>{{.Object.VersionID}}</dd>
+      <dt>Size</dt><dd>{{.Object.Size}}</dd>
+      <dt>ETag</dt><dd>{{.Object.ETag}}</dd>
+      <dt>Checksum</dt><dd>{{.Object.ChecksumSHA256}}</dd>
+      <dt>Created</dt><dd>{{.Object.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</dd>
+    </dl>
+  {{else}}
+    <p>Object not found.</p>
+  {{end}}
+</article>
+{{end}}
+
+{{define "partials/flash"}}
+{{if .Error}}
+<div class="flash error">{{.Error}}</div>
+{{else}}
+<div class="flash success">Action completed.</div>
+{{end}}
+{{end}}
+
+{{define "partials/pagination"}}
+<nav aria-label="Pagination">
+  {{if .IsTruncated}}
+    <a href="/app/buckets/{{p .BucketName}}/objects?prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .NextContinuationToken}}">Next</a>
+  {{else}}
+    <span>End of results</span>
+  {{end}}
+</nav>
+{{end}}

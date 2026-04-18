@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "tmp/air"
+
+[build]
+cmd = "go build -o ./tmp/air/s000 ./cmd/s000"
+bin = "./tmp/air/s000"
+full_bin = "./tmp/air/s000"
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", ".git"]
+delay = 200
+stop_on_error = true
+
+[log]
+time = true
+
+[color]
+main = "cyan"
+watcher = "yellow"
+build = "green"
+runner = "magenta"

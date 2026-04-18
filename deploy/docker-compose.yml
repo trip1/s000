@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  s000:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: s000:local
+    container_name: s000
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      S000_ADDR: ":9000"
+      S000_ADMIN_ACCESS_KEY: "admin"
+      S000_ADMIN_SECRET_KEY: "change-me"
+      S000_DATA_DIR: "/var/lib/s000/data"
+      S000_METADATA_BACKEND: "sqlite"
+      S000_METADATA_DSN: "file:/var/lib/s000/data/s000-metadata.db"
+    volumes:
+      - s000-data:/var/lib/s000/data
+
+volumes:
+  s000-data:
