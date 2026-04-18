@@ -292,11 +292,11 @@ Full WASI support ("Docker at the edge"):
 - [x] Implement event ordering and guarantees (priority asc, name asc, short-circuit on `continue=false`)
 
 #### Phase 4: Development Experience
-- [ ] Add function templates (hello world, image processor, http-proxy)
-- [ ] Implement function logs and metrics
-- [ ] Add local testing mode (invoke function locally)
-- [ ] Add debugging support (logs, stack traces)
-- [ ] Create CLI for function management
+- [x] Add function templates (hello world, image processor, http-proxy)
+- [x] Implement function logs and metrics
+- [x] Add local testing mode (invoke function locally)
+- [x] Add debugging support (logs, stack traces)
+- [x] Create CLI for function management
 
 #### Phase 5: Production Hardening
 - [ ] Add function isolation/security review

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"ds9labs.com/s000/internal/functions"
@@ -22,6 +23,61 @@ type functionRequest struct {
 
 type activateVersionRequest struct {
 	Version int `json:"version"`
+}
+
+type invokeRequest struct {
+	Payload json.RawMessage `json:"payload"`
+}
+
+func functionsTemplatesHandler(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		mgr := opts.Functions
+		if mgr == nil || !mgr.Enabled() {
+			http.Error(w, `{"error":"functions runtime is disabled"}`, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]any{"templates": functions.BuiltinTemplates()})
+	}
+}
+
+func functionsMetricsHandler(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		mgr := opts.Functions
+		if mgr == nil || !mgr.Enabled() {
+			http.Error(w, `{"error":"functions runtime is disabled"}`, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]any{"metrics": mgr.Metrics()})
+	}
+}
+
+func functionsLogsHandler(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		mgr := opts.Functions
+		if mgr == nil || !mgr.Enabled() {
+			http.Error(w, `{"error":"functions runtime is disabled"}`, http.StatusServiceUnavailable)
+			return
+		}
+		limit := 50
+		if q := strings.TrimSpace(r.URL.Query().Get("limit")); q != "" {
+			if n, err := strconv.Atoi(q); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]any{"logs": mgr.RecentLogs(limit)})
+	}
 }
 
 func functionsCollectionHandler(opts Options) http.HandlerFunc {
@@ -115,6 +171,27 @@ func functionsItemHandler(opts Options) http.HandlerFunc {
 			}
 			def, _ := mgr.GetFunction(name)
 			writeJSONResponse(w, http.StatusOK, map[string]any{"function": toFunctionResponse(def)})
+			return
+		}
+		if action == "invoke" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req invokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, `{"error":"invalid json body"}`, http.StatusBadRequest)
+				return
+			}
+			if len(req.Payload) == 0 {
+				req.Payload = json.RawMessage(`{}`)
+			}
+			result, err := mgr.InvokeFunction(r.Context(), name, req.Payload)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			writeJSONResponse(w, http.StatusOK, map[string]any{"result": result})
 			return
 		}
 		if action != "" {

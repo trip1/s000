@@ -5,9 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,13 +20,37 @@ type Manager struct {
 	registry       *Registry
 	runtimeFactory func(string) (Runtime, error)
 	reloadCancel   context.CancelFunc
+	mu             sync.Mutex
+	metrics        map[string]*FunctionMetric
+	logs           []FunctionLogEntry
+}
+
+type FunctionMetric struct {
+	Function       string        `json:"function"`
+	Invocations    uint64        `json:"invocations"`
+	Errors         uint64        `json:"errors"`
+	LastDuration   time.Duration `json:"last_duration"`
+	TotalDuration  time.Duration `json:"total_duration"`
+	LastInvokedAt  time.Time     `json:"last_invoked_at,omitempty"`
+	LastError      string        `json:"last_error,omitempty"`
+	LastStackTrace string        `json:"last_stack_trace,omitempty"`
+}
+
+type FunctionLogEntry struct {
+	Timestamp  time.Time     `json:"timestamp"`
+	Function   string        `json:"function"`
+	Trigger    string        `json:"trigger"`
+	Outcome    string        `json:"outcome"`
+	Duration   time.Duration `json:"duration"`
+	Error      string        `json:"error,omitempty"`
+	StackTrace string        `json:"stack_trace,omitempty"`
 }
 
 func NewManager(cfg Config) (*Manager, error) {
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	return &Manager{cfg: cfg, registry: NewRegistry(nil), runtimeFactory: NewRuntime}, nil
+	return &Manager{cfg: cfg, registry: NewRegistry(nil), runtimeFactory: NewRuntime, metrics: make(map[string]*FunctionMetric)}, nil
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -151,18 +178,9 @@ func (m *Manager) Trigger(ctx context.Context, trigger string, payload any) (Inv
 	}
 	result := InvocationResult{Continue: true}
 	for _, def := range defs {
-		compiled, err := rt.Compile(ctx, def.Module)
-		if err != nil {
-			return InvocationResult{}, fmt.Errorf("functions: compile %s: %w", def.Name, err)
-		}
-		inst, err := rt.Instantiate(ctx, compiled, Imports{Environment: map[string]string{"S000_FUNCTION_NAME": def.Name}})
-		if err != nil {
-			return InvocationResult{}, fmt.Errorf("functions: instantiate %s: %w", def.Name, err)
-		}
-		out, invokeErr := inst.Invoke(ctx, "handle", input)
-		_ = inst.Close()
+		out, invokeErr := m.invokeOne(ctx, rt, trigger, def, input)
 		if invokeErr != nil {
-			return InvocationResult{}, fmt.Errorf("functions: invoke %s: %w", def.Name, invokeErr)
+			return InvocationResult{}, invokeErr
 		}
 		if len(out) == 0 {
 			continue
@@ -181,6 +199,120 @@ func (m *Manager) Trigger(ctx context.Context, trigger string, payload any) (Inv
 		result.Output = append([]byte(nil), out...)
 	}
 	return result, nil
+}
+
+func (m *Manager) InvokeFunction(ctx context.Context, name string, payload json.RawMessage) (InvocationResult, error) {
+	if !m.cfg.Enabled {
+		return InvocationResult{}, fmt.Errorf("functions: runtime is disabled")
+	}
+	def, err := m.registry.Get(name)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	rt := m.runtime
+	if rt == nil {
+		return InvocationResult{}, fmt.Errorf("functions: runtime is not started")
+	}
+	out, err := m.invokeOne(ctx, rt, "manual", def, payload)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if len(out) == 0 {
+		return InvocationResult{Continue: true}, nil
+	}
+	var parsed InvocationResult
+	if err := json.Unmarshal(out, &parsed); err == nil {
+		return parsed, nil
+	}
+	return InvocationResult{Continue: true, Output: append([]byte(nil), out...)}, nil
+}
+
+func (m *Manager) invokeOne(ctx context.Context, rt Runtime, trigger string, def Function, input []byte) (out []byte, err error) {
+	start := time.Now()
+	var stack string
+	defer func() {
+		dur := time.Since(start)
+		if rec := recover(); rec != nil {
+			stack = string(debug.Stack())
+			err = fmt.Errorf("functions: panic in %s: %v", def.Name, rec)
+		}
+		m.recordInvocation(def.Name, trigger, dur, err, stack)
+		if err != nil {
+			slog.Warn("function invocation failed", "function", def.Name, "trigger", trigger, "error", err)
+		}
+	}()
+
+	compiled, err := rt.Compile(ctx, def.Module)
+	if err != nil {
+		return nil, fmt.Errorf("functions: compile %s: %w", def.Name, err)
+	}
+	inst, err := rt.Instantiate(ctx, compiled, Imports{Environment: map[string]string{"S000_FUNCTION_NAME": def.Name, "S000_FUNCTION_TRIGGER": trigger}})
+	if err != nil {
+		return nil, fmt.Errorf("functions: instantiate %s: %w", def.Name, err)
+	}
+	defer func() { _ = inst.Close() }()
+	out, err = inst.Invoke(ctx, "handle", input)
+	if err != nil {
+		return nil, fmt.Errorf("functions: invoke %s: %w", def.Name, err)
+	}
+	return out, nil
+}
+
+func (m *Manager) recordInvocation(name string, trigger string, duration time.Duration, err error, stack string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	metric, ok := m.metrics[name]
+	if !ok {
+		metric = &FunctionMetric{Function: name}
+		m.metrics[name] = metric
+	}
+	metric.Invocations++
+	metric.LastDuration = duration
+	metric.TotalDuration += duration
+	metric.LastInvokedAt = time.Now().UTC()
+	outcome := "ok"
+	errText := ""
+	if err != nil {
+		metric.Errors++
+		metric.LastError = err.Error()
+		metric.LastStackTrace = stack
+		outcome = "error"
+		errText = err.Error()
+	}
+	m.logs = append(m.logs, FunctionLogEntry{
+		Timestamp:  metric.LastInvokedAt,
+		Function:   name,
+		Trigger:    trigger,
+		Outcome:    outcome,
+		Duration:   duration,
+		Error:      errText,
+		StackTrace: stack,
+	})
+	if len(m.logs) > 200 {
+		m.logs = m.logs[len(m.logs)-200:]
+	}
+}
+
+func (m *Manager) Metrics() []FunctionMetric {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]FunctionMetric, 0, len(m.metrics))
+	for _, v := range m.metrics {
+		out = append(out, *v)
+	}
+	return out
+}
+
+func (m *Manager) RecentLogs(limit int) []FunctionLogEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 || limit > len(m.logs) {
+		limit = len(m.logs)
+	}
+	start := len(m.logs) - limit
+	out := make([]FunctionLogEntry, limit)
+	copy(out, m.logs[start:])
+	return out
 }
 
 func (m *Manager) TriggerS3(ctx context.Context, trigger string, event S3Event) (InvocationResult, error) {

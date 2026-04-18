@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,6 +40,22 @@ func run(args []string, out io.Writer, errOut io.Writer) int {
 		return runHealthInspect(args[1:], out, errOut)
 	case "completion":
 		return runCompletion(args[1:], out, errOut)
+	case "functions-list":
+		return runFunctionsList(args[1:], out, errOut)
+	case "functions-get":
+		return runFunctionsGet(args[1:], out, errOut)
+	case "functions-create":
+		return runFunctionsCreate(args[1:], out, errOut)
+	case "functions-delete":
+		return runFunctionsDelete(args[1:], out, errOut)
+	case "functions-invoke":
+		return runFunctionsInvoke(args[1:], out, errOut)
+	case "functions-templates":
+		return runFunctionsTemplates(args[1:], out, errOut)
+	case "functions-metrics":
+		return runFunctionsMetrics(args[1:], out, errOut)
+	case "functions-logs":
+		return runFunctionsLogs(args[1:], out, errOut)
 	default:
 		_, _ = fmt.Fprintf(errOut, "unknown command %q\n\n", cmd)
 		writeRootHelp(errOut)
@@ -54,6 +74,14 @@ Commands:
   restore-validate   Validate backup restore layout
   health-inspect     Check /healthz and /readyz on one endpoint
   completion         Print shell completion script snippet
+  functions-list     List registered functions
+  functions-get      Get one function metadata
+  functions-create   Create function from wasm module
+  functions-delete   Delete one function
+  functions-invoke   Invoke one function locally via API
+  functions-templates  List built-in templates
+  functions-metrics  Show function metrics
+  functions-logs     Show recent function logs
   help               Show this help
 
 Examples:
@@ -61,6 +89,8 @@ Examples:
   s000ctl restore-validate --path ./backup
   s000ctl health-inspect --endpoint http://127.0.0.1:9000
   s000ctl completion --shell bash
+  s000ctl functions-list --endpoint http://127.0.0.1:9000
+  s000ctl functions-create --endpoint http://127.0.0.1:9000 --name fn --trigger onPutObjectPre --module ./fn.wasm
 `)
 }
 
@@ -170,17 +200,256 @@ func runCompletion(args []string, out io.Writer, errOut io.Writer) int {
 }
 
 func completionScript(shell string) (string, error) {
-	commands := "backup-create restore-validate health-inspect completion help"
+	commands := "backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help"
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "bash":
 		return fmt.Sprintf("complete -W \"%s\" s000ctl", commands), nil
 	case "zsh":
-		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect completion help))'", nil
+		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help))'", nil
 	case "fish":
-		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect completion help\"", nil
+		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help\"", nil
 	case "powershell", "pwsh":
-		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','completion','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
+		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','completion','functions-list','functions-get','functions-create','functions-delete','functions-invoke','functions-templates','functions-metrics','functions-logs','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
 	default:
 		return "", errors.New("unsupported shell")
 	}
+}
+
+func runFunctionsList(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-list", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions", nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-list failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsGet(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-get", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	name := ""
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.StringVar(&name, "name", name, "function name")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(name) == "" {
+		_, _ = fmt.Fprintln(errOut, "functions-get: --name is required")
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions/"+name, nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-get failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsCreate(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-create", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	name := ""
+	trigger := "onPutObjectPre"
+	runtime := "wazero"
+	modulePath := ""
+	enabled := true
+	priority := 100
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.StringVar(&name, "name", name, "function name")
+	fs.StringVar(&trigger, "trigger", trigger, "function trigger")
+	fs.StringVar(&runtime, "runtime", runtime, "function runtime")
+	fs.StringVar(&modulePath, "module", modulePath, "path to wasm module")
+	fs.BoolVar(&enabled, "enabled", enabled, "enable function")
+	fs.IntVar(&priority, "priority", priority, "lower runs first")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(modulePath) == "" {
+		_, _ = fmt.Fprintln(errOut, "functions-create: --name and --module are required")
+		return 2
+	}
+	module, err := os.ReadFile(filepath.Clean(modulePath))
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-create: read module failed: %v\n", err)
+		return 1
+	}
+	payload := map[string]any{
+		"name":          name,
+		"runtime":       runtime,
+		"trigger":       trigger,
+		"priority":      priority,
+		"enabled":       enabled,
+		"module_base64": base64.StdEncoding.EncodeToString(module),
+	}
+	body, _ := json.Marshal(payload)
+	resp, err := doJSONRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/functions", body)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-create failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsDelete(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-delete", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	name := ""
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.StringVar(&name, "name", name, "function name")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(name) == "" {
+		_, _ = fmt.Fprintln(errOut, "functions-delete: --name is required")
+		return 2
+	}
+	if _, err := doJSONRequest(http.MethodDelete, strings.TrimRight(endpoint, "/")+"/functions/"+name, nil); err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-delete failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, "deleted")
+	return 0
+}
+
+func runFunctionsInvoke(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-invoke", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	name := ""
+	payload := "{}"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.StringVar(&name, "name", name, "function name")
+	fs.StringVar(&payload, "payload", payload, "JSON payload")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(name) == "" {
+		_, _ = fmt.Fprintln(errOut, "functions-invoke: --name is required")
+		return 2
+	}
+	reqBody, _ := json.Marshal(map[string]any{"payload": json.RawMessage(payload)})
+	resp, err := doJSONRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/functions/"+name+"/invoke", reqBody)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-invoke failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsTemplates(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-templates", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions/templates", nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-templates failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsMetrics(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-metrics", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions/metrics", nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-metrics failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsLogs(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-logs", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	limit := 50
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.IntVar(&limit, "limit", limit, "max log entries")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, fmt.Sprintf("%s/functions/logs?limit=%d", strings.TrimRight(endpoint, "/"), limit), nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-logs failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func doJSONRequest(method string, url string, payload []byte) ([]byte, error) {
+	var body io.Reader
+	if payload != nil {
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return raw, nil
 }

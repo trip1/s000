@@ -110,6 +110,10 @@ When `S000_FUNCTIONS_ENABLED=true`, authenticated function management endpoints 
 - `DELETE /functions/{name}` - delete a function.
 - `GET /functions/{name}/versions` - list immutable versions.
 - `POST /functions/{name}/activate` - switch active version (`{"version":N}`).
+- `POST /functions/{name}/invoke` - invoke one function locally for testing.
+- `GET /functions/templates` - list built-in function templates.
+- `GET /functions/metrics` - function invocation metrics.
+- `GET /functions/logs` - recent function logs (`?limit=50`).
 
 Function payload fields:
 
@@ -131,6 +135,17 @@ Hot reload manifest mode (`S000_FUNCTIONS_HOT_RELOAD=true`):
 - Place `*.json` manifest files in `S000_FUNCTIONS_DIR`.
 - Manifest fields: `name`, `runtime`, `trigger`, `enabled`, and either `module_path` or `module_base64`.
 - Changed manifests/modules create a new function version automatically.
+
+CLI function management (`s000ctl`):
+
+- `s000ctl functions-list --endpoint http://127.0.0.1:9000`
+- `s000ctl functions-create --endpoint http://127.0.0.1:9000 --name fn --trigger onPutObjectPre --module ./fn.wasm`
+- `s000ctl functions-get --endpoint http://127.0.0.1:9000 --name fn`
+- `s000ctl functions-delete --endpoint http://127.0.0.1:9000 --name fn`
+- `s000ctl functions-invoke --endpoint http://127.0.0.1:9000 --name fn --payload '{"bucket":"photos"}'`
+- `s000ctl functions-templates --endpoint http://127.0.0.1:9000`
+- `s000ctl functions-metrics --endpoint http://127.0.0.1:9000`
+- `s000ctl functions-logs --endpoint http://127.0.0.1:9000 --limit 50`
 
 ## Metrics Endpoint
 

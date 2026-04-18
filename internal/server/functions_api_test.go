@@ -143,6 +143,59 @@ func TestFunctionsVersionsAndActivateAPI(t *testing.T) {
 	}
 }
 
+func TestFunctionsInvokeMetricsLogsAndTemplatesAPI(t *testing.T) {
+	t.Parallel()
+
+	h, _ := testHandlerWithFunctions(t, []byte(`{"continue":true,"output":{"ok":true}}`))
+	moduleV1 := base64.StdEncoding.EncodeToString([]byte("v1"))
+	body := `{"name":"fn-i","runtime":"wazero","trigger":"onPutObjectPre","enabled":true,"module_base64":"` + moduleV1 + `"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/functions", bytes.NewBufferString(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	invokeReq := httptest.NewRequest(http.MethodPost, "/functions/fn-i/invoke", bytes.NewBufferString(`{"payload":{"k":"v"}}`))
+	invokeReq.Header.Set("Content-Type", "application/json")
+	invokeRR := httptest.NewRecorder()
+	h.ServeHTTP(invokeRR, invokeReq)
+	if invokeRR.Code != http.StatusOK {
+		t.Fatalf("expected invoke status 200, got %d body=%s", invokeRR.Code, invokeRR.Body.String())
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/functions/metrics", nil)
+	metricsRR := httptest.NewRecorder()
+	h.ServeHTTP(metricsRR, metricsReq)
+	if metricsRR.Code != http.StatusOK {
+		t.Fatalf("expected metrics status 200, got %d", metricsRR.Code)
+	}
+	if !bytes.Contains(metricsRR.Body.Bytes(), []byte("fn-i")) {
+		t.Fatalf("expected metrics body to include function name, got %s", metricsRR.Body.String())
+	}
+
+	logsReq := httptest.NewRequest(http.MethodGet, "/functions/logs?limit=10", nil)
+	logsRR := httptest.NewRecorder()
+	h.ServeHTTP(logsRR, logsReq)
+	if logsRR.Code != http.StatusOK {
+		t.Fatalf("expected logs status 200, got %d", logsRR.Code)
+	}
+	if !bytes.Contains(logsRR.Body.Bytes(), []byte("manual")) {
+		t.Fatalf("expected logs body to include trigger manual, got %s", logsRR.Body.String())
+	}
+
+	templatesReq := httptest.NewRequest(http.MethodGet, "/functions/templates", nil)
+	templatesRR := httptest.NewRecorder()
+	h.ServeHTTP(templatesRR, templatesReq)
+	if templatesRR.Code != http.StatusOK {
+		t.Fatalf("expected templates status 200, got %d", templatesRR.Code)
+	}
+	if !bytes.Contains(templatesRR.Body.Bytes(), []byte("hello-json")) {
+		t.Fatalf("expected templates body to include hello-json, got %s", templatesRR.Body.String())
+	}
+}
+
 func TestPutObjectPreHookBlocksWrite(t *testing.T) {
 	t.Parallel()
 
