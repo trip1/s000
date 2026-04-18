@@ -15,6 +15,8 @@ Full pages:
 - `GET /app/uploads` - multipart upload monitor shell.
 - `GET /app/settings` - client/session settings shell.
 - `GET /app/audit` - audit events shell.
+- `GET /app/functions` - functions index and operations page.
+- `GET /app/functions/:name` - function detail page.
 
 htmx partials:
 
@@ -23,6 +25,11 @@ htmx partials:
 - `GET /app/partials/object-metadata`
 - `GET /app/partials/flash`
 - `GET /app/partials/pagination`
+- `GET /app/partials/functions`
+- `GET /app/partials/function-versions`
+- `GET /app/partials/function-metrics`
+- `GET /app/partials/function-alerts`
+- `GET /app/partials/function-logs`
 
 Static assets:
 
@@ -49,6 +56,13 @@ Static assets:
   - `POST /app/actions/delete-object`
 - Download action is available for object detail pages:
   - `GET /app/actions/download-object?bucket=<bucket>&key=<key>`
+- Functions UI actions (CSRF-protected) are available for:
+  - `POST /app/actions/functions/create`
+  - `POST /app/actions/functions/update`
+  - `POST /app/actions/functions/delete`
+  - `POST /app/actions/functions/activate`
+  - `POST /app/actions/functions/invoke`
+- Functions UI uses htmx targeted refresh with `HX-Trigger: functions-changed` and partial blocks listening on `hx-trigger="..., functions-changed from:body"`.
 
 ## Web Client Configuration
 
@@ -64,6 +78,7 @@ Static assets:
 - CSRF token is generated per session and required for HTML form actions.
 - htmx requests send CSRF token in `X-CSRF-Token` header.
 - Form actions enforce method constraints (`POST` for mutating operations).
+- Functions delete/activate actions include explicit operator confirmation prompts.
 
 ## Accessibility and Responsive Verification
 
@@ -76,3 +91,22 @@ Static assets:
 - UI authentication is in-memory session-only (not distributed/session-store backed).
 - Upload progress enhancement uses XMLHttpRequest in-browser; no server-side resumable upload management in UI yet.
 - Object listing pagination currently supports forward continuation token navigation only.
+- Functions module input in UI currently uses base64 text field; direct wasm file upload UI is not implemented yet.
+
+## Operator Walkthrough (Functions)
+
+Recommended walkthrough sequence for operator onboarding:
+
+1. Open `/app/functions` and review configuration inspector + templates.
+2. Create a function (name/runtime/trigger/priority/module_base64).
+3. Open `/app/functions/:name` and verify metadata + active version.
+4. Invoke manually with JSON payload and verify flash result.
+5. Update function to create a new immutable version.
+6. Activate previous version from versions panel (rollback flow).
+7. Review metrics, alerts, and logs panels.
+
+Screenshot checkpoints to capture in documentation assets:
+
+- Functions index page with non-empty table.
+- Function detail page with versions list and activate form.
+- Metrics/alerts/logs blocks after at least one invoke.

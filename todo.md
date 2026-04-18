@@ -463,3 +463,46 @@ fn main() {
 - Per GB-second (compute)
 - Per GB-hour (memory)
 - Network egress
+
+## 20. HTMX Function Management UI
+
+Roadmap for adding full web UI coverage for WASM function operations under `/app/*`.
+
+### UX Scope
+- [x] Add dedicated Functions index page (`/app/functions`) with status cards (runtime, enabled count, alert count).
+- [x] Add Function detail page (`/app/functions/{name}`) with metadata, active version, trigger, priority, and runtime.
+- [x] Add Create Function flow (form + module upload/base64 option + trigger/runtime/priority).
+- [x] Add Edit Function flow (toggle enabled, update trigger/runtime/priority, upload new module -> new version).
+- [x] Add Delete Function action with confirmation and safe error display.
+- [x] Add Version Management panel (list versions + activate selected version + rollback shortcut).
+- [x] Add Local Invoke panel (JSON payload input + rendered result + copy output).
+- [x] Add Templates browser/apply flow (select built-in template and prefill create form).
+
+### HTMX Partials and Endpoints
+- [x] Add HTMX partial for functions table (sortable by name/priority/trigger/runtime).
+- [x] Add HTMX partial for function versions list with active badge.
+- [x] Add HTMX partial for metrics widget (invocations/errors/rate-limited/quota/concurrency denials).
+- [x] Add HTMX partial for alerts widget (`/functions/alerts` projection).
+- [x] Add HTMX partial for recent logs stream with polling interval and limit controls.
+- [x] Add HTMX action endpoints for create/update/delete/activate/invoke operations.
+- [x] Add optimistic refresh strategy (`hx-swap`, targeted refresh blocks) without full page reloads.
+
+### UX Behavior and Safety
+- [x] Add CSRF-safe POST flows for all mutating function actions.
+- [x] Add clear success/error flash handling for async actions.
+- [x] Add form validation UX (required fields, invalid JSON payload, invalid module file).
+- [x] Add guardrails for dangerous actions (delete function, activate old version) with confirmation prompts.
+- [x] Add accessibility review: keyboard flow, labels, ARIA live regions for async results.
+
+### Operational Visibility in UI
+- [x] Add live metrics dashboard section on Functions page.
+- [x] Add alert severity badges and reason breakdown.
+- [x] Add log viewer filters (function name, trigger, outcome) and pagination/load-more.
+- [x] Add configuration inspector panel (rate limit/quota/concurrency and runtime flags).
+
+### Testing and Documentation
+- [x] Add handler/template tests for all new functions pages and partials.
+- [x] Add integration tests for core UI flows: create -> invoke -> activate -> delete.
+- [x] Add regression tests for CSRF failures and permission-denied cases.
+- [x] Update `docs/htmx-client.md` with Functions UI routes, partials, and operational caveats.
+- [x] Add screenshots/walkthrough in docs for operator onboarding.

@@ -130,6 +130,10 @@ func (m *Manager) Enabled() bool {
 	return m.cfg.Enabled
 }
 
+func (m *Manager) ConfigSnapshot() Config {
+	return m.cfg
+}
+
 func (m *Manager) CreateFunction(def Function) error {
 	if !m.cfg.Enabled {
 		return fmt.Errorf("functions: runtime is disabled")

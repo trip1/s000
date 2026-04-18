@@ -239,3 +239,160 @@
   </article>
   {{template "layout_end" .}}
 {{end}}
+
+{{define "pages/functions"}}
+  {{template "layout_start" .}}
+  <article data-title="Functions">
+    <h1>Functions</h1>
+    <div id="functions-flash" role="status" aria-live="polite">
+      {{if .Flash}}<div class="flash success">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    </div>
+    <p>Manage runtime hooks for S3 and HTTP flows.</p>
+  </article>
+  <article>
+    <h2>Create Function</h2>
+    <form method="post" action="/app/actions/functions/create" aria-label="Create function" hx-post="/app/actions/functions/create" hx-target="#functions-flash" hx-swap="innerHTML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <label for="fn-name">Name</label>
+      <input id="fn-name" type="text" name="name" required>
+      <label for="fn-runtime">Runtime</label>
+      <select id="fn-runtime" name="runtime">
+        <option value="wazero">wazero</option>
+        <option value="wasmer">wasmer</option>
+      </select>
+      <label for="fn-trigger">Trigger</label>
+      <select id="fn-trigger" name="trigger">
+        <option value="onPutObjectPre">onPutObjectPre</option>
+        <option value="onPutObjectPost">onPutObjectPost</option>
+        <option value="onHTTPPre">onHTTPPre</option>
+        <option value="onHTTPPost">onHTTPPost</option>
+        <option value="onCronTick">onCronTick</option>
+      </select>
+      <label for="fn-priority">Priority</label>
+      <input id="fn-priority" type="number" name="priority" value="100" min="1">
+      <label><input type="checkbox" name="enabled" checked> Enabled</label>
+      <label for="fn-module">Module base64</label>
+      <textarea id="fn-module" name="module_base64" rows="4" placeholder="base64 wasm bytes" required></textarea>
+      <button type="submit">Create function</button>
+    </form>
+  </article>
+  <article>
+    <h2>Configuration Inspector</h2>
+    <dl>
+      <dt>Runtime</dt><dd>{{.FunctionsConfig.Runtime}}</dd>
+      <dt>Rate limit / minute</dt><dd>{{.FunctionsConfig.RateLimitPerMinute}}</dd>
+      <dt>Max concurrent</dt><dd>{{.FunctionsConfig.MaxConcurrent}}</dd>
+      <dt>Daily quota</dt><dd>{{.FunctionsConfig.DailyInvocationQuota}}</dd>
+      <dt>Alert threshold</dt><dd>{{.FunctionsConfig.AlertErrorCountThreshold}}</dd>
+      <dt>Hot reload</dt><dd>{{.FunctionsConfig.HotReload}}</dd>
+      <dt>Reload interval</dt><dd>{{.FunctionsConfig.ReloadInterval}}</dd>
+    </dl>
+  </article>
+  <article>
+    <h2>Templates</h2>
+    <ul>
+      {{if not .FunctionTemplates}}
+        <li>No templates available.</li>
+      {{end}}
+      {{range .FunctionTemplates}}
+        <li><strong>{{.Name}}</strong> - {{.Description}} ({{.Language}})</li>
+      {{end}}
+    </ul>
+  </article>
+  <div hx-get="/app/partials/functions" hx-trigger="load, functions-changed from:body" hx-target="#functions-table" hx-swap="innerHTML">Loading functions...</div>
+  <div id="functions-table"></div>
+  <div hx-get="/app/partials/function-metrics" hx-trigger="load, functions-changed from:body" hx-target="#functions-metrics" hx-swap="innerHTML">Loading metrics...</div>
+  <div id="functions-metrics"></div>
+  <div hx-get="/app/partials/function-alerts" hx-trigger="load, functions-changed from:body" hx-target="#functions-alerts" hx-swap="innerHTML">Loading alerts...</div>
+  <div id="functions-alerts"></div>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/function_detail"}}
+  {{template "layout_start" .}}
+  <article data-title="Function Detail">
+    <h1>Function: {{.FunctionName}}</h1>
+    <div id="function-detail-flash" role="status" aria-live="polite">
+      {{if .Flash}}<div class="flash success">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    </div>
+    {{if .Function}}
+      <dl>
+        <dt>Runtime</dt><dd>{{.Function.Runtime}}</dd>
+        <dt>Trigger</dt><dd>{{.Function.Trigger}}</dd>
+        <dt>Priority</dt><dd>{{.Function.Priority}}</dd>
+        <dt>Enabled</dt><dd>{{.Function.Enabled}}</dd>
+        <dt>Active Version</dt><dd>{{.Function.ActiveVersion}}</dd>
+      </dl>
+    {{end}}
+  </article>
+  <article>
+    <h2>Update</h2>
+    <form method="post" action="/app/actions/functions/update" aria-label="Update function" hx-post="/app/actions/functions/update" hx-target="#function-detail-flash" hx-swap="innerHTML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="name" value="{{.FunctionName}}">
+      <label for="fn-detail-runtime">Runtime</label>
+      <select id="fn-detail-runtime" name="runtime">
+        <option value="wazero" {{if and .Function (eq .Function.Runtime "wazero")}}selected{{end}}>wazero</option>
+        <option value="wasmer" {{if and .Function (eq .Function.Runtime "wasmer")}}selected{{end}}>wasmer</option>
+      </select>
+      <label for="fn-detail-trigger">Trigger</label>
+      <select id="fn-detail-trigger" name="trigger">
+        <option value="onPutObjectPre" {{if and .Function (eq .Function.Trigger "onPutObjectPre")}}selected{{end}}>onPutObjectPre</option>
+        <option value="onPutObjectPost" {{if and .Function (eq .Function.Trigger "onPutObjectPost")}}selected{{end}}>onPutObjectPost</option>
+        <option value="onHTTPPre" {{if and .Function (eq .Function.Trigger "onHTTPPre")}}selected{{end}}>onHTTPPre</option>
+        <option value="onHTTPPost" {{if and .Function (eq .Function.Trigger "onHTTPPost")}}selected{{end}}>onHTTPPost</option>
+        <option value="onCronTick" {{if and .Function (eq .Function.Trigger "onCronTick")}}selected{{end}}>onCronTick</option>
+      </select>
+      <label for="fn-detail-priority">Priority</label>
+      <input id="fn-detail-priority" type="number" name="priority" value="{{if .Function}}{{.Function.Priority}}{{else}}100{{end}}" min="1">
+      <label><input type="checkbox" name="enabled" {{if and .Function .Function.Enabled}}checked{{end}}> Enabled</label>
+      <label for="fn-detail-module">Module base64 (optional for new version)</label>
+      <textarea id="fn-detail-module" name="module_base64" rows="4" placeholder="leave blank to keep current module"></textarea>
+      <button type="submit">Update function</button>
+    </form>
+  </article>
+  <article>
+    <h2>Invoke</h2>
+    <form method="post" action="/app/actions/functions/invoke" aria-label="Invoke function" hx-post="/app/actions/functions/invoke" hx-target="#function-detail-flash" hx-swap="innerHTML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="name" value="{{.FunctionName}}">
+      <label for="invoke-payload">Payload JSON</label>
+      <textarea id="invoke-payload" name="payload" rows="4">{"event":"manual"}</textarea>
+      <button type="submit">Invoke</button>
+    </form>
+  </article>
+  <article>
+    <h2>Delete</h2>
+    <form method="post" action="/app/actions/functions/delete" aria-label="Delete function" hx-post="/app/actions/functions/delete" hx-target="#function-detail-flash" hx-swap="innerHTML" onsubmit="return confirm('Delete this function? This cannot be undone.')">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="name" value="{{.FunctionName}}">
+      <button type="submit">Delete function</button>
+    </form>
+  </article>
+  <div hx-get="/app/partials/function-versions?name={{q .FunctionName}}" hx-trigger="load, functions-changed from:body" hx-target="#function-versions" hx-swap="innerHTML">Loading versions...</div>
+  <div id="function-versions"></div>
+  <article>
+    <h2>Log Filters</h2>
+    <form aria-label="Function log filters" hx-get="/app/partials/function-logs" hx-target="#function-logs" hx-swap="innerHTML">
+      <label for="log-name">Function name</label>
+      <input id="log-name" type="text" name="name" value="{{.FunctionName}}">
+      <label for="log-trigger">Trigger</label>
+      <input id="log-trigger" type="text" name="trigger" placeholder="onPutObjectPre">
+      <label for="log-outcome">Outcome</label>
+      <select id="log-outcome" name="outcome">
+        <option value="">(all)</option>
+        <option value="ok">ok</option>
+        <option value="error">error</option>
+        <option value="denied">denied</option>
+      </select>
+      <label for="log-limit">Limit</label>
+      <input id="log-limit" type="number" name="limit" min="1" value="50">
+      <button type="submit">Apply log filters</button>
+    </form>
+  </article>
+  <div hx-get="/app/partials/function-logs?limit=50&name={{q .FunctionName}}" hx-trigger="load, functions-changed from:body" hx-target="#function-logs" hx-swap="innerHTML">Loading logs...</div>
+  <div id="function-logs"></div>
+  {{template "layout_end" .}}
+{{end}}

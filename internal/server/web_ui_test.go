@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"ds9labs.com/s000/internal/blob"
+	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/metadata"
 )
 
@@ -325,6 +326,187 @@ func TestWebUIThemeFromConfigAndThemeAction(t *testing.T) {
 	}
 }
 
+func TestWebUIFunctionsPagesPartialsAndActions(t *testing.T) {
+	t.Parallel()
+
+	h := newAuthedWebUIHandlerWithFunctions(t)
+	cookie := loginAndGetSessionCookie(t, h)
+	csrf := extractCSRFToken(t, h, cookie, "/app/functions")
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/app/functions", nil)
+	pageReq.AddCookie(cookie)
+	pageRR := httptest.NewRecorder()
+	h.ServeHTTP(pageRR, pageReq)
+	if pageRR.Code != http.StatusOK {
+		t.Fatalf("expected functions page status 200, got %d", pageRR.Code)
+	}
+	if !strings.Contains(pageRR.Body.String(), "Functions") {
+		t.Fatalf("expected functions page content, got %q", pageRR.Body.String())
+	}
+	pageBody := pageRR.Body.String()
+	if !strings.Contains(pageBody, "Configuration Inspector") || !strings.Contains(pageBody, "aria-live=\"polite\"") {
+		t.Fatalf("expected configuration inspector and aria-live markers in functions page, got %q", pageBody)
+	}
+
+	createForm := url.Values{
+		"_csrf":         {csrf},
+		"name":          {"ui-fn"},
+		"runtime":       {"wazero"},
+		"trigger":       {"onPutObjectPre"},
+		"priority":      {"100"},
+		"enabled":       {"on"},
+		"module_base64": {"bW9kdWxl"},
+	}
+	createReq := httptest.NewRequest(http.MethodPost, "/app/actions/functions/create", strings.NewReader(createForm.Encode()))
+	createReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	createReq.AddCookie(cookie)
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected functions create redirect, got %d body=%q", createRR.Code, createRR.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/app/partials/functions", nil)
+	listReq.AddCookie(cookie)
+	listRR := httptest.NewRecorder()
+	h.ServeHTTP(listRR, listReq)
+	if listRR.Code != http.StatusOK || !strings.Contains(listRR.Body.String(), "ui-fn") {
+		t.Fatalf("expected functions partial to include ui-fn, status=%d body=%q", listRR.Code, listRR.Body.String())
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/app/functions/ui-fn", nil)
+	detailReq.AddCookie(cookie)
+	detailRR := httptest.NewRecorder()
+	h.ServeHTTP(detailRR, detailReq)
+	if detailRR.Code != http.StatusOK {
+		t.Fatalf("expected function detail status 200, got %d", detailRR.Code)
+	}
+	detailBody := detailRR.Body.String()
+	if !strings.Contains(detailBody, "Delete this function?") {
+		t.Fatalf("expected delete confirmation guardrail in function detail page, got %q", detailBody)
+	}
+
+	invokeForm := url.Values{"_csrf": {csrf}, "name": {"ui-fn"}, "payload": {`{"bucket":"photos"}`}}
+	invokeReq := httptest.NewRequest(http.MethodPost, "/app/actions/functions/invoke", strings.NewReader(invokeForm.Encode()))
+	invokeReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	invokeReq.AddCookie(cookie)
+	invokeRR := httptest.NewRecorder()
+	h.ServeHTTP(invokeRR, invokeReq)
+	if invokeRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected invoke redirect, got %d body=%q", invokeRR.Code, invokeRR.Body.String())
+	}
+
+	versionsReq := httptest.NewRequest(http.MethodGet, "/app/partials/function-versions?name=ui-fn", nil)
+	versionsReq.AddCookie(cookie)
+	versionsRR := httptest.NewRecorder()
+	h.ServeHTTP(versionsRR, versionsReq)
+	if versionsRR.Code != http.StatusOK {
+		t.Fatalf("expected versions partial status 200, got %d", versionsRR.Code)
+	}
+	if !strings.Contains(versionsRR.Body.String(), "Activate") {
+		t.Fatalf("expected activate control in versions partial, got %q", versionsRR.Body.String())
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/app/partials/function-metrics", nil)
+	metricsReq.AddCookie(cookie)
+	metricsRR := httptest.NewRecorder()
+	h.ServeHTTP(metricsRR, metricsReq)
+	if metricsRR.Code != http.StatusOK {
+		t.Fatalf("expected metrics partial status 200, got %d", metricsRR.Code)
+	}
+
+	alertsReq := httptest.NewRequest(http.MethodGet, "/app/partials/function-alerts", nil)
+	alertsReq.AddCookie(cookie)
+	alertsRR := httptest.NewRecorder()
+	h.ServeHTTP(alertsRR, alertsReq)
+	if alertsRR.Code != http.StatusOK {
+		t.Fatalf("expected alerts partial status 200, got %d", alertsRR.Code)
+	}
+
+	logsReq := httptest.NewRequest(http.MethodGet, "/app/partials/function-logs?limit=10", nil)
+	logsReq.AddCookie(cookie)
+	logsRR := httptest.NewRecorder()
+	h.ServeHTTP(logsRR, logsReq)
+	if logsRR.Code != http.StatusOK {
+		t.Fatalf("expected logs partial status 200, got %d", logsRR.Code)
+	}
+
+	deleteForm := url.Values{"_csrf": {csrf}, "name": {"ui-fn"}}
+	deleteReq := httptest.NewRequest(http.MethodPost, "/app/actions/functions/delete", strings.NewReader(deleteForm.Encode()))
+	deleteReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleteReq.AddCookie(cookie)
+	deleteRR := httptest.NewRecorder()
+	h.ServeHTTP(deleteRR, deleteReq)
+	if deleteRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected delete redirect, got %d", deleteRR.Code)
+	}
+}
+
+func TestWebUIFunctionsActionsRequireCSRF(t *testing.T) {
+	t.Parallel()
+
+	h := newAuthedWebUIHandlerWithFunctions(t)
+	cookie := loginAndGetSessionCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodPost, "/app/actions/functions/create", strings.NewReader("name=x"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected csrf failure status 403, got %d", rr.Code)
+	}
+}
+
+func TestWebUIFunctionsRoutesRequireLogin(t *testing.T) {
+	t.Parallel()
+
+	h := newAuthedWebUIHandlerWithFunctions(t)
+	paths := []string{"/app/functions", "/app/functions/sample", "/app/partials/functions", "/app/partials/function-metrics", "/app/partials/function-alerts", "/app/partials/function-logs"}
+	for _, p := range paths {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected redirect status 303 for %s, got %d", p, rr.Code)
+		}
+	}
+}
+
+func TestWebUIFunctionsHTMXOptimisticRefresh(t *testing.T) {
+	t.Parallel()
+
+	h := newAuthedWebUIHandlerWithFunctions(t)
+	cookie := loginAndGetSessionCookie(t, h)
+	csrf := extractCSRFToken(t, h, cookie, "/app/functions")
+
+	form := url.Values{
+		"_csrf":         {csrf},
+		"name":          {"htmx-fn"},
+		"runtime":       {"wazero"},
+		"trigger":       {"onPutObjectPre"},
+		"priority":      {"100"},
+		"enabled":       {"on"},
+		"module_base64": {"bW9kdWxl"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/app/actions/functions/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected htmx status 200, got %d", rr.Code)
+	}
+	if trigger := rr.Header().Get("HX-Trigger"); trigger != "functions-changed" {
+		t.Fatalf("expected HX-Trigger functions-changed, got %q", trigger)
+	}
+	if !strings.Contains(rr.Body.String(), "function created") {
+		t.Fatalf("expected action flash in body, got %q", rr.Body.String())
+	}
+}
+
 func TestWebUIObjectDownloadAction(t *testing.T) {
 	t.Parallel()
 
@@ -403,6 +585,32 @@ func TestWebUISpecialCharacterKeysEncodedLinksAndActions(t *testing.T) {
 
 func newAuthedWebUIHandler(t *testing.T) http.Handler {
 	return newAuthedWebUIHandlerWithTheme(t, "sysadmin90")
+}
+
+func newAuthedWebUIHandlerWithFunctions(t *testing.T) http.Handler {
+	t.Helper()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	bstore, err := blob.NewStore(blob.Config{RootDir: root, FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+	mstore, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:" + filepath.Join(root, "meta.db")})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	if err := mstore.CreateBucket(ctx, metadata.Bucket{Name: "photos", CreatedAt: time.Now().UTC(), VersioningStatus: "Suspended", Region: "us-east-1"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	mgr, err := functions.NewManager(functions.Config{Enabled: true, Dir: t.TempDir(), Runtime: functions.RuntimeWazero, MemoryLimitMB: 64, CPULimit: 100 * time.Millisecond, ReloadInterval: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	mgr.SetRuntimeForTesting(fakeRuntime{output: []byte(`{"continue":true,"output":{"ok":true}}`)})
+
+	return NewHandler(Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret", UITheme: "sysadmin90", Functions: mgr})
 }
 
 func newAuthedWebUIHandlerWithTheme(t *testing.T, theme string) http.Handler {
