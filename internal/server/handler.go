@@ -87,6 +87,7 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("/debug/lifecycle/metrics", lifecycleMetricsDebug(opts))
 	mux.HandleFunc("/functions/templates", functionsTemplatesHandler(opts))
 	mux.HandleFunc("/functions/metrics", functionsMetricsHandler(opts))
+	mux.HandleFunc("/functions/alerts", functionsAlertsHandler(opts))
 	mux.HandleFunc("/functions/logs", functionsLogsHandler(opts))
 	mux.HandleFunc("/functions", functionsCollectionHandler(opts))
 	mux.HandleFunc("/functions/", functionsItemHandler(opts))

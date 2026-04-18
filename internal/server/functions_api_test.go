@@ -185,6 +185,13 @@ func TestFunctionsInvokeMetricsLogsAndTemplatesAPI(t *testing.T) {
 		t.Fatalf("expected logs body to include trigger manual, got %s", logsRR.Body.String())
 	}
 
+	alertsReq := httptest.NewRequest(http.MethodGet, "/functions/alerts", nil)
+	alertsRR := httptest.NewRecorder()
+	h.ServeHTTP(alertsRR, alertsReq)
+	if alertsRR.Code != http.StatusOK {
+		t.Fatalf("expected alerts status 200, got %d", alertsRR.Code)
+	}
+
 	templatesReq := httptest.NewRequest(http.MethodGet, "/functions/templates", nil)
 	templatesRR := httptest.NewRecorder()
 	h.ServeHTTP(templatesRR, templatesReq)
@@ -213,7 +220,85 @@ func TestPutObjectPreHookBlocksWrite(t *testing.T) {
 	}
 }
 
+func TestPutObjectRateLimitFlowAndAlerts(t *testing.T) {
+	t.Parallel()
+
+	h, mstore := testHandlerWithFunctionsConfig(t, []byte(`{"continue":true}`), functions.Config{
+		Enabled:                  true,
+		Dir:                      t.TempDir(),
+		Runtime:                  functions.RuntimeWazero,
+		MemoryLimitMB:            64,
+		CPULimit:                 100 * time.Millisecond,
+		NetworkAllow:             true,
+		FSAllow:                  false,
+		ReloadInterval:           2 * time.Second,
+		RateLimitPerMinute:       1,
+		AlertErrorCountThreshold: 1,
+	})
+
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "photos", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	module := base64.StdEncoding.EncodeToString([]byte("module"))
+	createReq := httptest.NewRequest(http.MethodPost, "/functions", bytes.NewBufferString(`{"name":"rl","runtime":"wazero","trigger":"onPutObjectPre","enabled":true,"module_base64":"`+module+`"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	firstPut := httptest.NewRequest(http.MethodPut, "/photos/one.txt", bytes.NewBufferString("hello"))
+	firstRR := httptest.NewRecorder()
+	h.ServeHTTP(firstRR, firstPut)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("expected first put status 200, got %d body=%s", firstRR.Code, firstRR.Body.String())
+	}
+
+	secondPut := httptest.NewRequest(http.MethodPut, "/photos/two.txt", bytes.NewBufferString("hello"))
+	secondRR := httptest.NewRecorder()
+	h.ServeHTTP(secondRR, secondPut)
+	if secondRR.Code != http.StatusInternalServerError {
+		t.Fatalf("expected second put status 500 from rate limit deny, got %d body=%s", secondRR.Code, secondRR.Body.String())
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/functions/metrics", nil)
+	metricsRR := httptest.NewRecorder()
+	h.ServeHTTP(metricsRR, metricsReq)
+	if metricsRR.Code != http.StatusOK {
+		t.Fatalf("expected metrics status 200, got %d", metricsRR.Code)
+	}
+	if !bytes.Contains(metricsRR.Body.Bytes(), []byte("rate_limited")) {
+		t.Fatalf("expected metrics to include rate_limited counter, got %s", metricsRR.Body.String())
+	}
+
+	alertsReq := httptest.NewRequest(http.MethodGet, "/functions/alerts", nil)
+	alertsRR := httptest.NewRecorder()
+	h.ServeHTTP(alertsRR, alertsReq)
+	if alertsRR.Code != http.StatusOK {
+		t.Fatalf("expected alerts status 200, got %d", alertsRR.Code)
+	}
+	if !bytes.Contains(alertsRR.Body.Bytes(), []byte("rate_limited")) {
+		t.Fatalf("expected alerts to include rate_limited reason, got %s", alertsRR.Body.String())
+	}
+}
+
 func testHandlerWithFunctions(t *testing.T, runtimeOutput []byte) (http.Handler, metadata.Store) {
+	t.Helper()
+	return testHandlerWithFunctionsConfig(t, runtimeOutput, functions.Config{
+		Enabled:        true,
+		Dir:            t.TempDir(),
+		Runtime:        functions.RuntimeWazero,
+		MemoryLimitMB:  64,
+		CPULimit:       100 * time.Millisecond,
+		NetworkAllow:   true,
+		FSAllow:        false,
+		ReloadInterval: 2 * time.Second,
+	})
+}
+
+func testHandlerWithFunctionsConfig(t *testing.T, runtimeOutput []byte, fnCfg functions.Config) (http.Handler, metadata.Store) {
 	t.Helper()
 
 	store, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:test.db"})
@@ -225,16 +310,7 @@ func testHandlerWithFunctions(t *testing.T, runtimeOutput []byte) (http.Handler,
 		t.Fatalf("new blob store failed: %v", err)
 	}
 
-	mgr, err := functions.NewManager(functions.Config{
-		Enabled:        true,
-		Dir:            t.TempDir(),
-		Runtime:        functions.RuntimeWazero,
-		MemoryLimitMB:  64,
-		CPULimit:       100 * time.Millisecond,
-		NetworkAllow:   true,
-		FSAllow:        false,
-		ReloadInterval: 2 * time.Second,
-	})
+	mgr, err := functions.NewManager(fnCfg)
 	if err != nil {
 		t.Fatalf("new manager failed: %v", err)
 	}

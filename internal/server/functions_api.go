@@ -59,6 +59,21 @@ func functionsMetricsHandler(opts Options) http.HandlerFunc {
 	}
 }
 
+func functionsAlertsHandler(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		mgr := opts.Functions
+		if mgr == nil || !mgr.Enabled() {
+			http.Error(w, `{"error":"functions runtime is disabled"}`, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]any{"alerts": mgr.Alerts()})
+	}
+}
+
 func functionsLogsHandler(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

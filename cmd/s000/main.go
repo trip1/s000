@@ -78,15 +78,19 @@ func main() {
 	}
 
 	functionsManager, err := functions.NewManager(functions.Config{
-		Enabled:        cfg.FunctionsEnabled,
-		Dir:            cfg.FunctionsDir,
-		Runtime:        cfg.FunctionsRuntime,
-		MemoryLimitMB:  cfg.FunctionsMemoryLimit,
-		CPULimit:       cfg.FunctionsCPULimit,
-		NetworkAllow:   cfg.FunctionsNetworkAllow,
-		FSAllow:        cfg.FunctionsFSAllow,
-		HotReload:      cfg.FunctionsHotReload,
-		ReloadInterval: cfg.FunctionsReloadInterval,
+		Enabled:                  cfg.FunctionsEnabled,
+		Dir:                      cfg.FunctionsDir,
+		Runtime:                  cfg.FunctionsRuntime,
+		MemoryLimitMB:            cfg.FunctionsMemoryLimit,
+		CPULimit:                 cfg.FunctionsCPULimit,
+		NetworkAllow:             cfg.FunctionsNetworkAllow,
+		FSAllow:                  cfg.FunctionsFSAllow,
+		HotReload:                cfg.FunctionsHotReload,
+		ReloadInterval:           cfg.FunctionsReloadInterval,
+		RateLimitPerMinute:       cfg.FunctionsRateLimitPerMinute,
+		MaxConcurrent:            cfg.FunctionsMaxConcurrent,
+		DailyInvocationQuota:     cfg.FunctionsDailyQuota,
+		AlertErrorCountThreshold: uint64(cfg.FunctionsAlertErrorCountThreshold),
 	})
 	if err != nil {
 		log.Fatal(err)

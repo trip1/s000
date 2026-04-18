@@ -10,97 +10,105 @@ import (
 )
 
 const (
-	defaultAddr                    = ":9000"
-	defaultDataDir                 = "./data"
-	defaultLogMode                 = "info"
-	defaultShutdownTimeout         = 10 * time.Second
-	defaultMaxInFlight             = 128
-	defaultAuthMaxSkew             = 15 * time.Minute
-	defaultMetadataBackend         = "sqlite"
-	defaultMetadataDSN             = "file:./data/s000-metadata.db"
-	defaultValkeyAddr              = "127.0.0.1:6379"
-	defaultMetadataConnectTimeout  = 3 * time.Second
-	defaultLifecycleInterval       = 5 * time.Minute
-	defaultLifecycleBatchSize      = 100
-	defaultLifecycleMaxRetries     = 3
-	defaultLifecycleBackoff        = 200 * time.Millisecond
-	defaultMetricsPath             = "/metrics"
-	defaultHTTPReadHeaderTimeout   = 5 * time.Second
-	defaultHTTPReadTimeout         = 30 * time.Second
-	defaultHTTPWriteTimeout        = 30 * time.Second
-	defaultHTTPIdleTimeout         = 60 * time.Second
-	defaultHTTPMaxHeaderBytes      = 1 << 20
-	defaultHeavyOpsWorkers         = 4
-	defaultHeavyOpsQueue           = 64
-	defaultTLSEnabled              = false
-	defaultTLSMinVersion           = "1.2"
-	defaultAuthFailThreshold       = 20
-	defaultAuthFailWindow          = time.Minute
-	defaultAuthBlockDuration       = 5 * time.Minute
-	defaultUITheme                 = "sysadmin90"
-	defaultWebsiteEnabled          = false
-	defaultWebsiteAddr             = ":9001"
-	defaultFunctionsEnabled        = false
-	defaultFunctionsDir            = "./functions"
-	defaultFunctionsRuntime        = "wazero"
-	defaultFunctionsMemoryLimit    = 64
-	defaultFunctionsCPULimit       = 100 * time.Millisecond
-	defaultFunctionsNetworkAllow   = true
-	defaultFunctionsFSAllow        = false
-	defaultFunctionsHotReload      = false
-	defaultFunctionsReloadInterval = 2 * time.Second
+	defaultAddr                              = ":9000"
+	defaultDataDir                           = "./data"
+	defaultLogMode                           = "info"
+	defaultShutdownTimeout                   = 10 * time.Second
+	defaultMaxInFlight                       = 128
+	defaultAuthMaxSkew                       = 15 * time.Minute
+	defaultMetadataBackend                   = "sqlite"
+	defaultMetadataDSN                       = "file:./data/s000-metadata.db"
+	defaultValkeyAddr                        = "127.0.0.1:6379"
+	defaultMetadataConnectTimeout            = 3 * time.Second
+	defaultLifecycleInterval                 = 5 * time.Minute
+	defaultLifecycleBatchSize                = 100
+	defaultLifecycleMaxRetries               = 3
+	defaultLifecycleBackoff                  = 200 * time.Millisecond
+	defaultMetricsPath                       = "/metrics"
+	defaultHTTPReadHeaderTimeout             = 5 * time.Second
+	defaultHTTPReadTimeout                   = 30 * time.Second
+	defaultHTTPWriteTimeout                  = 30 * time.Second
+	defaultHTTPIdleTimeout                   = 60 * time.Second
+	defaultHTTPMaxHeaderBytes                = 1 << 20
+	defaultHeavyOpsWorkers                   = 4
+	defaultHeavyOpsQueue                     = 64
+	defaultTLSEnabled                        = false
+	defaultTLSMinVersion                     = "1.2"
+	defaultAuthFailThreshold                 = 20
+	defaultAuthFailWindow                    = time.Minute
+	defaultAuthBlockDuration                 = 5 * time.Minute
+	defaultUITheme                           = "sysadmin90"
+	defaultWebsiteEnabled                    = false
+	defaultWebsiteAddr                       = ":9001"
+	defaultFunctionsEnabled                  = false
+	defaultFunctionsDir                      = "./functions"
+	defaultFunctionsRuntime                  = "wazero"
+	defaultFunctionsMemoryLimit              = 64
+	defaultFunctionsCPULimit                 = 100 * time.Millisecond
+	defaultFunctionsNetworkAllow             = true
+	defaultFunctionsFSAllow                  = false
+	defaultFunctionsHotReload                = false
+	defaultFunctionsReloadInterval           = 2 * time.Second
+	defaultFunctionsRateLimitPerMinute       = 0
+	defaultFunctionsMaxConcurrent            = 0
+	defaultFunctionsDailyQuota               = 0
+	defaultFunctionsAlertErrorCountThreshold = 10
 )
 
 type Config struct {
-	Addr                    string
-	DataDir                 string
-	LogMode                 string
-	Domain                  string
-	ShutdownTimeout         time.Duration
-	MaxInFlight             int
-	AuthMaxSkew             time.Duration
-	AdminAccessKey          string
-	AdminSecretKey          string
-	MetadataBackend         string
-	MetadataDSN             string
-	MetadataValkeyAddr      string
-	MetadataConnectTimeout  time.Duration
-	LifecycleRules          string
-	LifecycleInterval       time.Duration
-	LifecycleBatchSize      int
-	LifecycleMaxRetries     int
-	LifecycleBackoff        time.Duration
-	LifecycleDryRun         bool
-	MetricsPath             string
-	TracingEnabled          bool
-	HTTPReadHeaderTimeout   time.Duration
-	HTTPReadTimeout         time.Duration
-	HTTPWriteTimeout        time.Duration
-	HTTPIdleTimeout         time.Duration
-	HTTPMaxHeaderBytes      int
-	HTTPDisableKeepAlive    bool
-	HeavyOpsWorkers         int
-	HeavyOpsQueue           int
-	TLSEnabled              bool
-	TLSCertFile             string
-	TLSKeyFile              string
-	TLSMinVersion           string
-	AuthFailThreshold       int
-	AuthFailWindow          time.Duration
-	AuthBlockDuration       time.Duration
-	UITheme                 string
-	WebsiteEnabled          bool
-	WebsiteAddr             string
-	WebsiteDomain           string
-	FunctionsEnabled        bool
-	FunctionsDir            string
-	FunctionsRuntime        string
-	FunctionsMemoryLimit    int
-	FunctionsCPULimit       time.Duration
-	FunctionsNetworkAllow   bool
-	FunctionsFSAllow        bool
-	FunctionsHotReload      bool
-	FunctionsReloadInterval time.Duration
+	Addr                              string
+	DataDir                           string
+	LogMode                           string
+	Domain                            string
+	ShutdownTimeout                   time.Duration
+	MaxInFlight                       int
+	AuthMaxSkew                       time.Duration
+	AdminAccessKey                    string
+	AdminSecretKey                    string
+	MetadataBackend                   string
+	MetadataDSN                       string
+	MetadataValkeyAddr                string
+	MetadataConnectTimeout            time.Duration
+	LifecycleRules                    string
+	LifecycleInterval                 time.Duration
+	LifecycleBatchSize                int
+	LifecycleMaxRetries               int
+	LifecycleBackoff                  time.Duration
+	LifecycleDryRun                   bool
+	MetricsPath                       string
+	TracingEnabled                    bool
+	HTTPReadHeaderTimeout             time.Duration
+	HTTPReadTimeout                   time.Duration
+	HTTPWriteTimeout                  time.Duration
+	HTTPIdleTimeout                   time.Duration
+	HTTPMaxHeaderBytes                int
+	HTTPDisableKeepAlive              bool
+	HeavyOpsWorkers                   int
+	HeavyOpsQueue                     int
+	TLSEnabled                        bool
+	TLSCertFile                       string
+	TLSKeyFile                        string
+	TLSMinVersion                     string
+	AuthFailThreshold                 int
+	AuthFailWindow                    time.Duration
+	AuthBlockDuration                 time.Duration
+	UITheme                           string
+	WebsiteEnabled                    bool
+	WebsiteAddr                       string
+	WebsiteDomain                     string
+	FunctionsEnabled                  bool
+	FunctionsDir                      string
+	FunctionsRuntime                  string
+	FunctionsMemoryLimit              int
+	FunctionsCPULimit                 time.Duration
+	FunctionsNetworkAllow             bool
+	FunctionsFSAllow                  bool
+	FunctionsHotReload                bool
+	FunctionsReloadInterval           time.Duration
+	FunctionsRateLimitPerMinute       int
+	FunctionsMaxConcurrent            int
+	FunctionsDailyQuota               int
+	FunctionsAlertErrorCountThreshold int
 }
 
 // Load returns configuration using process environment variables.
@@ -111,45 +119,49 @@ func Load() Config {
 // LoadFromEnv builds configuration from a getenv function.
 func LoadFromEnv(getenv func(string) string) Config {
 	cfg := Config{
-		Addr:                    defaultAddr,
-		DataDir:                 defaultDataDir,
-		LogMode:                 defaultLogMode,
-		ShutdownTimeout:         defaultShutdownTimeout,
-		MaxInFlight:             defaultMaxInFlight,
-		AuthMaxSkew:             defaultAuthMaxSkew,
-		MetadataBackend:         defaultMetadataBackend,
-		MetadataDSN:             defaultMetadataDSN,
-		MetadataValkeyAddr:      defaultValkeyAddr,
-		MetadataConnectTimeout:  defaultMetadataConnectTimeout,
-		LifecycleInterval:       defaultLifecycleInterval,
-		LifecycleBatchSize:      defaultLifecycleBatchSize,
-		LifecycleMaxRetries:     defaultLifecycleMaxRetries,
-		LifecycleBackoff:        defaultLifecycleBackoff,
-		MetricsPath:             defaultMetricsPath,
-		HTTPReadHeaderTimeout:   defaultHTTPReadHeaderTimeout,
-		HTTPReadTimeout:         defaultHTTPReadTimeout,
-		HTTPWriteTimeout:        defaultHTTPWriteTimeout,
-		HTTPIdleTimeout:         defaultHTTPIdleTimeout,
-		HTTPMaxHeaderBytes:      defaultHTTPMaxHeaderBytes,
-		HeavyOpsWorkers:         defaultHeavyOpsWorkers,
-		HeavyOpsQueue:           defaultHeavyOpsQueue,
-		TLSEnabled:              defaultTLSEnabled,
-		TLSMinVersion:           defaultTLSMinVersion,
-		AuthFailThreshold:       defaultAuthFailThreshold,
-		AuthFailWindow:          defaultAuthFailWindow,
-		AuthBlockDuration:       defaultAuthBlockDuration,
-		UITheme:                 defaultUITheme,
-		WebsiteEnabled:          defaultWebsiteEnabled,
-		WebsiteAddr:             defaultWebsiteAddr,
-		FunctionsEnabled:        defaultFunctionsEnabled,
-		FunctionsDir:            defaultFunctionsDir,
-		FunctionsRuntime:        defaultFunctionsRuntime,
-		FunctionsMemoryLimit:    defaultFunctionsMemoryLimit,
-		FunctionsCPULimit:       defaultFunctionsCPULimit,
-		FunctionsNetworkAllow:   defaultFunctionsNetworkAllow,
-		FunctionsFSAllow:        defaultFunctionsFSAllow,
-		FunctionsHotReload:      defaultFunctionsHotReload,
-		FunctionsReloadInterval: defaultFunctionsReloadInterval,
+		Addr:                              defaultAddr,
+		DataDir:                           defaultDataDir,
+		LogMode:                           defaultLogMode,
+		ShutdownTimeout:                   defaultShutdownTimeout,
+		MaxInFlight:                       defaultMaxInFlight,
+		AuthMaxSkew:                       defaultAuthMaxSkew,
+		MetadataBackend:                   defaultMetadataBackend,
+		MetadataDSN:                       defaultMetadataDSN,
+		MetadataValkeyAddr:                defaultValkeyAddr,
+		MetadataConnectTimeout:            defaultMetadataConnectTimeout,
+		LifecycleInterval:                 defaultLifecycleInterval,
+		LifecycleBatchSize:                defaultLifecycleBatchSize,
+		LifecycleMaxRetries:               defaultLifecycleMaxRetries,
+		LifecycleBackoff:                  defaultLifecycleBackoff,
+		MetricsPath:                       defaultMetricsPath,
+		HTTPReadHeaderTimeout:             defaultHTTPReadHeaderTimeout,
+		HTTPReadTimeout:                   defaultHTTPReadTimeout,
+		HTTPWriteTimeout:                  defaultHTTPWriteTimeout,
+		HTTPIdleTimeout:                   defaultHTTPIdleTimeout,
+		HTTPMaxHeaderBytes:                defaultHTTPMaxHeaderBytes,
+		HeavyOpsWorkers:                   defaultHeavyOpsWorkers,
+		HeavyOpsQueue:                     defaultHeavyOpsQueue,
+		TLSEnabled:                        defaultTLSEnabled,
+		TLSMinVersion:                     defaultTLSMinVersion,
+		AuthFailThreshold:                 defaultAuthFailThreshold,
+		AuthFailWindow:                    defaultAuthFailWindow,
+		AuthBlockDuration:                 defaultAuthBlockDuration,
+		UITheme:                           defaultUITheme,
+		WebsiteEnabled:                    defaultWebsiteEnabled,
+		WebsiteAddr:                       defaultWebsiteAddr,
+		FunctionsEnabled:                  defaultFunctionsEnabled,
+		FunctionsDir:                      defaultFunctionsDir,
+		FunctionsRuntime:                  defaultFunctionsRuntime,
+		FunctionsMemoryLimit:              defaultFunctionsMemoryLimit,
+		FunctionsCPULimit:                 defaultFunctionsCPULimit,
+		FunctionsNetworkAllow:             defaultFunctionsNetworkAllow,
+		FunctionsFSAllow:                  defaultFunctionsFSAllow,
+		FunctionsHotReload:                defaultFunctionsHotReload,
+		FunctionsReloadInterval:           defaultFunctionsReloadInterval,
+		FunctionsRateLimitPerMinute:       defaultFunctionsRateLimitPerMinute,
+		FunctionsMaxConcurrent:            defaultFunctionsMaxConcurrent,
+		FunctionsDailyQuota:               defaultFunctionsDailyQuota,
+		FunctionsAlertErrorCountThreshold: defaultFunctionsAlertErrorCountThreshold,
 	}
 
 	if v := getenv("S000_ADDR"); v != "" {
@@ -357,6 +369,26 @@ func LoadFromEnv(getenv func(string) string) Config {
 	if v := getenv("S000_FUNCTIONS_RELOAD_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			cfg.FunctionsReloadInterval = d
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.FunctionsRateLimitPerMinute = n
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_MAX_CONCURRENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.FunctionsMaxConcurrent = n
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_DAILY_QUOTA"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.FunctionsDailyQuota = n
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_ALERT_ERROR_COUNT_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.FunctionsAlertErrorCountThreshold = n
 		}
 	}
 

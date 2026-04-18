@@ -299,12 +299,12 @@ Full WASI support ("Docker at the edge"):
 - [x] Create CLI for function management
 
 #### Phase 5: Production Hardening
-- [ ] Add function isolation/security review
-- [ ] Implement function scaling strategy
-- [ ] Add function monitoring and alerts
-- [ ] Implement rate limiting per function
-- [ ] Add function quotas (invocations, duration)
-- [ ] Document function deployment patterns
+- [x] Add function isolation/security review
+- [x] Implement function scaling strategy
+- [x] Add function monitoring and alerts
+- [x] Implement rate limiting per function
+- [x] Add function quotas (invocations, duration)
+- [x] Document function deployment patterns
 
 ### Runtime Specification
 

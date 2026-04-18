@@ -23,17 +23,21 @@ type Manager struct {
 	mu             sync.Mutex
 	metrics        map[string]*FunctionMetric
 	logs           []FunctionLogEntry
+	guards         map[string]*functionGuard
 }
 
 type FunctionMetric struct {
-	Function       string        `json:"function"`
-	Invocations    uint64        `json:"invocations"`
-	Errors         uint64        `json:"errors"`
-	LastDuration   time.Duration `json:"last_duration"`
-	TotalDuration  time.Duration `json:"total_duration"`
-	LastInvokedAt  time.Time     `json:"last_invoked_at,omitempty"`
-	LastError      string        `json:"last_error,omitempty"`
-	LastStackTrace string        `json:"last_stack_trace,omitempty"`
+	Function         string        `json:"function"`
+	Invocations      uint64        `json:"invocations"`
+	Errors           uint64        `json:"errors"`
+	RateLimited      uint64        `json:"rate_limited"`
+	QuotaExceeded    uint64        `json:"quota_exceeded"`
+	ConcurrentDenied uint64        `json:"concurrent_denied"`
+	LastDuration     time.Duration `json:"last_duration"`
+	TotalDuration    time.Duration `json:"total_duration"`
+	LastInvokedAt    time.Time     `json:"last_invoked_at,omitempty"`
+	LastError        string        `json:"last_error,omitempty"`
+	LastStackTrace   string        `json:"last_stack_trace,omitempty"`
 }
 
 type FunctionLogEntry struct {
@@ -46,11 +50,26 @@ type FunctionLogEntry struct {
 	StackTrace string        `json:"stack_trace,omitempty"`
 }
 
+type FunctionAlert struct {
+	Function  string    `json:"function"`
+	Severity  string    `json:"severity"`
+	Reason    string    `json:"reason"`
+	Triggered time.Time `json:"triggered"`
+}
+
+type functionGuard struct {
+	minuteWindowStart time.Time
+	minuteCount       int
+	dayWindowStart    time.Time
+	dayCount          int
+	inflight          int
+}
+
 func NewManager(cfg Config) (*Manager, error) {
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	return &Manager{cfg: cfg, registry: NewRegistry(nil), runtimeFactory: NewRuntime, metrics: make(map[string]*FunctionMetric)}, nil
+	return &Manager{cfg: cfg, registry: NewRegistry(nil), runtimeFactory: NewRuntime, metrics: make(map[string]*FunctionMetric), guards: make(map[string]*functionGuard)}, nil
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -228,6 +247,12 @@ func (m *Manager) InvokeFunction(ctx context.Context, name string, payload json.
 }
 
 func (m *Manager) invokeOne(ctx context.Context, rt Runtime, trigger string, def Function, input []byte) (out []byte, err error) {
+	if guardErr := m.acquireInvocationSlot(def.Name); guardErr != nil {
+		m.recordDenied(def.Name, trigger, guardErr)
+		return nil, fmt.Errorf("functions: invoke %s: %w", def.Name, guardErr)
+	}
+	defer m.releaseInvocationSlot(def.Name)
+
 	start := time.Now()
 	var stack string
 	defer func() {
@@ -256,6 +281,54 @@ func (m *Manager) invokeOne(ctx context.Context, rt Runtime, trigger string, def
 		return nil, fmt.Errorf("functions: invoke %s: %w", def.Name, err)
 	}
 	return out, nil
+}
+
+func (m *Manager) acquireInvocationSlot(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	g, ok := m.guards[name]
+	if !ok {
+		g = &functionGuard{minuteWindowStart: now, dayWindowStart: now}
+		m.guards[name] = g
+	}
+	if m.cfg.MaxConcurrent > 0 && g.inflight >= m.cfg.MaxConcurrent {
+		return ErrConcurrentLimit
+	}
+	if m.cfg.RateLimitPerMinute > 0 {
+		if now.Sub(g.minuteWindowStart) >= time.Minute {
+			g.minuteWindowStart = now
+			g.minuteCount = 0
+		}
+		if g.minuteCount >= m.cfg.RateLimitPerMinute {
+			return ErrRateLimited
+		}
+		g.minuteCount++
+	}
+	if m.cfg.DailyInvocationQuota > 0 {
+		if now.Sub(g.dayWindowStart) >= 24*time.Hour {
+			g.dayWindowStart = now
+			g.dayCount = 0
+		}
+		if g.dayCount >= m.cfg.DailyInvocationQuota {
+			return ErrQuotaExceeded
+		}
+		g.dayCount++
+	}
+	g.inflight++
+	return nil
+}
+
+func (m *Manager) releaseInvocationSlot(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.guards[name]
+	if !ok {
+		return
+	}
+	if g.inflight > 0 {
+		g.inflight--
+	}
 }
 
 func (m *Manager) recordInvocation(name string, trigger string, duration time.Duration, err error, stack string) {
@@ -303,6 +376,29 @@ func (m *Manager) Metrics() []FunctionMetric {
 	return out
 }
 
+func (m *Manager) Alerts() []FunctionAlert {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	threshold := m.cfg.AlertErrorCountThreshold
+	if threshold == 0 {
+		threshold = 10
+	}
+	alerts := make([]FunctionAlert, 0)
+	for _, metric := range m.metrics {
+		if metric.Errors >= threshold {
+			alerts = append(alerts, FunctionAlert{Function: metric.Function, Severity: "warning", Reason: "error_count_threshold", Triggered: now})
+		}
+		if metric.RateLimited > 0 {
+			alerts = append(alerts, FunctionAlert{Function: metric.Function, Severity: "info", Reason: "rate_limited", Triggered: now})
+		}
+		if metric.QuotaExceeded > 0 {
+			alerts = append(alerts, FunctionAlert{Function: metric.Function, Severity: "critical", Reason: "quota_exceeded", Triggered: now})
+		}
+	}
+	return alerts
+}
+
 func (m *Manager) RecentLogs(limit int) []FunctionLogEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -313,6 +409,35 @@ func (m *Manager) RecentLogs(limit int) []FunctionLogEntry {
 	out := make([]FunctionLogEntry, limit)
 	copy(out, m.logs[start:])
 	return out
+}
+
+func (m *Manager) recordDenied(name string, trigger string, denyErr error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	metric, ok := m.metrics[name]
+	if !ok {
+		metric = &FunctionMetric{Function: name}
+		m.metrics[name] = metric
+	}
+	switch denyErr {
+	case ErrRateLimited:
+		metric.RateLimited++
+	case ErrQuotaExceeded:
+		metric.QuotaExceeded++
+	case ErrConcurrentLimit:
+		metric.ConcurrentDenied++
+	}
+	m.logs = append(m.logs, FunctionLogEntry{
+		Timestamp: time.Now().UTC(),
+		Function:  name,
+		Trigger:   trigger,
+		Outcome:   "denied",
+		Duration:  0,
+		Error:     denyErr.Error(),
+	})
+	if len(m.logs) > 200 {
+		m.logs = m.logs[len(m.logs)-200:]
+	}
 }
 
 func (m *Manager) TriggerS3(ctx context.Context, trigger string, event S3Event) (InvocationResult, error) {

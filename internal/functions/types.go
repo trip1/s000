@@ -15,29 +15,43 @@ const (
 
 var ErrNotImplemented = errors.New("functions: not implemented")
 
+var (
+	ErrRateLimited     = errors.New("functions: rate limited")
+	ErrQuotaExceeded   = errors.New("functions: daily quota exceeded")
+	ErrConcurrentLimit = errors.New("functions: concurrent limit exceeded")
+)
+
 type Config struct {
-	Enabled        bool
-	Dir            string
-	Runtime        string
-	MemoryLimitMB  int
-	CPULimit       time.Duration
-	NetworkAllow   bool
-	FSAllow        bool
-	HotReload      bool
-	ReloadInterval time.Duration
+	Enabled                  bool
+	Dir                      string
+	Runtime                  string
+	MemoryLimitMB            int
+	CPULimit                 time.Duration
+	NetworkAllow             bool
+	FSAllow                  bool
+	HotReload                bool
+	ReloadInterval           time.Duration
+	RateLimitPerMinute       int
+	MaxConcurrent            int
+	DailyInvocationQuota     int
+	AlertErrorCountThreshold uint64
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Enabled:        false,
-		Dir:            "./functions",
-		Runtime:        RuntimeWazero,
-		MemoryLimitMB:  64,
-		CPULimit:       100 * time.Millisecond,
-		NetworkAllow:   true,
-		FSAllow:        false,
-		HotReload:      false,
-		ReloadInterval: 2 * time.Second,
+		Enabled:                  false,
+		Dir:                      "./functions",
+		Runtime:                  RuntimeWazero,
+		MemoryLimitMB:            64,
+		CPULimit:                 100 * time.Millisecond,
+		NetworkAllow:             true,
+		FSAllow:                  false,
+		HotReload:                false,
+		ReloadInterval:           2 * time.Second,
+		RateLimitPerMinute:       0,
+		MaxConcurrent:            0,
+		DailyInvocationQuota:     0,
+		AlertErrorCountThreshold: 10,
 	}
 }
 
@@ -59,6 +73,15 @@ func ValidateConfig(cfg Config) error {
 	}
 	if cfg.ReloadInterval <= 0 {
 		return fmt.Errorf("functions: reload interval must be > 0")
+	}
+	if cfg.RateLimitPerMinute < 0 {
+		return fmt.Errorf("functions: rate limit per minute must be >= 0")
+	}
+	if cfg.MaxConcurrent < 0 {
+		return fmt.Errorf("functions: max concurrent must be >= 0")
+	}
+	if cfg.DailyInvocationQuota < 0 {
+		return fmt.Errorf("functions: daily invocation quota must be >= 0")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Runtime)) {
 	case RuntimeWasmer, RuntimeWazero:

@@ -159,6 +159,8 @@ func TestFunctionsCommands(t *testing.T) {
 			_, _ = w.Write([]byte(`{"functions":[]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/functions/templates":
 			_, _ = w.Write([]byte(`{"templates":[{"name":"hello-json"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/functions/alerts":
+			_, _ = w.Write([]byte(`{"alerts":[]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/functions/fn/invoke":
 			_, _ = w.Write([]byte(`{"result":{"continue":true}}`))
 		default:
@@ -183,6 +185,15 @@ func TestFunctionsCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hello-json") {
 		t.Fatalf("expected templates output, got %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if exit := run([]string{"functions-alerts", "--endpoint", ts.URL}, &out, &errOut); exit != 0 {
+		t.Fatalf("functions-alerts expected exit 0, got %d (%s)", exit, errOut.String())
+	}
+	if !strings.Contains(out.String(), "alerts") {
+		t.Fatalf("expected alerts output, got %q", out.String())
 	}
 
 	out.Reset()

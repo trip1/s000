@@ -54,6 +54,8 @@ func run(args []string, out io.Writer, errOut io.Writer) int {
 		return runFunctionsTemplates(args[1:], out, errOut)
 	case "functions-metrics":
 		return runFunctionsMetrics(args[1:], out, errOut)
+	case "functions-alerts":
+		return runFunctionsAlerts(args[1:], out, errOut)
 	case "functions-logs":
 		return runFunctionsLogs(args[1:], out, errOut)
 	default:
@@ -81,6 +83,7 @@ Commands:
   functions-invoke   Invoke one function locally via API
   functions-templates  List built-in templates
   functions-metrics  Show function metrics
+  functions-alerts   Show function alerts
   functions-logs     Show recent function logs
   help               Show this help
 
@@ -200,16 +203,16 @@ func runCompletion(args []string, out io.Writer, errOut io.Writer) int {
 }
 
 func completionScript(shell string) (string, error) {
-	commands := "backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help"
+	commands := "backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-alerts functions-logs help"
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "bash":
 		return fmt.Sprintf("complete -W \"%s\" s000ctl", commands), nil
 	case "zsh":
-		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help))'", nil
+		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-alerts functions-logs help))'", nil
 	case "fish":
-		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-logs help\"", nil
+		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect completion functions-list functions-get functions-create functions-delete functions-invoke functions-templates functions-metrics functions-alerts functions-logs help\"", nil
 	case "powershell", "pwsh":
-		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','completion','functions-list','functions-get','functions-create','functions-delete','functions-invoke','functions-templates','functions-metrics','functions-logs','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
+		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','completion','functions-list','functions-get','functions-create','functions-delete','functions-invoke','functions-templates','functions-metrics','functions-alerts','functions-logs','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
 	default:
 		return "", errors.New("unsupported shell")
 	}
@@ -399,6 +402,26 @@ func runFunctionsMetrics(args []string, out io.Writer, errOut io.Writer) int {
 	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions/metrics", nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(errOut, "functions-metrics failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, string(resp))
+	return 0
+}
+
+func runFunctionsAlerts(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("functions-alerts", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	resp, err := doJSONRequest(http.MethodGet, strings.TrimRight(endpoint, "/")+"/functions/alerts", nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "functions-alerts failed: %v\n", err)
 		return 1
 	}
 	_, _ = fmt.Fprintln(out, string(resp))

@@ -142,60 +142,76 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.FunctionsReloadInterval != 2*time.Second {
 		t.Fatalf("expected default functions reload interval 2s, got %s", cfg.FunctionsReloadInterval)
 	}
+	if cfg.FunctionsRateLimitPerMinute != 0 {
+		t.Fatalf("expected default functions rate limit per minute 0, got %d", cfg.FunctionsRateLimitPerMinute)
+	}
+	if cfg.FunctionsMaxConcurrent != 0 {
+		t.Fatalf("expected default functions max concurrent 0, got %d", cfg.FunctionsMaxConcurrent)
+	}
+	if cfg.FunctionsDailyQuota != 0 {
+		t.Fatalf("expected default functions daily quota 0, got %d", cfg.FunctionsDailyQuota)
+	}
+	if cfg.FunctionsAlertErrorCountThreshold != 10 {
+		t.Fatalf("expected default functions alert threshold 10, got %d", cfg.FunctionsAlertErrorCountThreshold)
+	}
 }
 
 func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Parallel()
 
 	values := map[string]string{
-		"S000_ADDR":                      ":7777",
-		"S000_DATA_DIR":                  "/tmp/s000-data",
-		"S000_LOG_MODE":                  "debug",
-		"S000_DOMAIN":                    "s000.local",
-		"S000_SHUTDOWN_TIMEOUT":          "3s",
-		"S000_MAX_INFLIGHT":              "42",
-		"S000_AUTH_MAX_SKEW":             "20m",
-		"S000_ADMIN_ACCESS_KEY":          "admin",
-		"S000_ADMIN_SECRET_KEY":          "super-secret",
-		"S000_METADATA_BACKEND":          "postgresql",
-		"S000_METADATA_DSN":              "postgres://user:pass@localhost:5432/s000?sslmode=disable",
-		"S000_VALKEY_ADDR":               "10.0.0.2:6379",
-		"S000_LIFECYCLE_RULES":           "prefix=tmp/,age=24h",
-		"S000_LIFECYCLE_INTERVAL":        "45s",
-		"S000_LIFECYCLE_BATCH_SIZE":      "75",
-		"S000_LIFECYCLE_MAX_RETRIES":     "5",
-		"S000_LIFECYCLE_BACKOFF":         "150ms",
-		"S000_LIFECYCLE_DRY_RUN":         "true",
-		"S000_METRICS_PATH":              "/internal-metrics",
-		"S000_TRACING_ENABLED":           "true",
-		"S000_HTTP_READ_HEADER_TIMEOUT":  "2s",
-		"S000_HTTP_READ_TIMEOUT":         "7s",
-		"S000_HTTP_WRITE_TIMEOUT":        "9s",
-		"S000_HTTP_IDLE_TIMEOUT":         "15s",
-		"S000_HTTP_MAX_HEADER_BYTES":     "8192",
-		"S000_HTTP_DISABLE_KEEPALIVE":    "true",
-		"S000_HEAVY_OPS_WORKERS":         "8",
-		"S000_HEAVY_OPS_QUEUE":           "32",
-		"S000_TLS_ENABLED":               "true",
-		"S000_TLS_CERT_FILE":             "/etc/s000/tls.crt",
-		"S000_TLS_KEY_FILE":              "/etc/s000/tls.key",
-		"S000_TLS_MIN_VERSION":           "1.3",
-		"S000_AUTH_FAIL_THRESHOLD":       "4",
-		"S000_AUTH_FAIL_WINDOW":          "90s",
-		"S000_AUTH_BLOCK_DURATION":       "2m",
-		"S000_UI_THEME":                  "graphite",
-		"S000_WEBSITE_ENABLED":           "true",
-		"S000_WEBSITE_ADDR":              ":9080",
-		"S000_WEBSITE_DOMAIN":            "website.local",
-		"S000_FUNCTIONS_ENABLED":         "true",
-		"S000_FUNCTIONS_DIR":             "/var/lib/s000/functions",
-		"S000_FUNCTIONS_RUNTIME":         "wasmer",
-		"S000_FUNCTIONS_MEMORY_LIMIT":    "128",
-		"S000_FUNCTIONS_CPU_LIMIT":       "250ms",
-		"S000_FUNCTIONS_NETWORK_ALLOW":   "false",
-		"S000_FUNCTIONS_FS_ALLOW":        "true",
-		"S000_FUNCTIONS_HOT_RELOAD":      "true",
-		"S000_FUNCTIONS_RELOAD_INTERVAL": "5s",
+		"S000_ADDR":                                  ":7777",
+		"S000_DATA_DIR":                              "/tmp/s000-data",
+		"S000_LOG_MODE":                              "debug",
+		"S000_DOMAIN":                                "s000.local",
+		"S000_SHUTDOWN_TIMEOUT":                      "3s",
+		"S000_MAX_INFLIGHT":                          "42",
+		"S000_AUTH_MAX_SKEW":                         "20m",
+		"S000_ADMIN_ACCESS_KEY":                      "admin",
+		"S000_ADMIN_SECRET_KEY":                      "super-secret",
+		"S000_METADATA_BACKEND":                      "postgresql",
+		"S000_METADATA_DSN":                          "postgres://user:pass@localhost:5432/s000?sslmode=disable",
+		"S000_VALKEY_ADDR":                           "10.0.0.2:6379",
+		"S000_LIFECYCLE_RULES":                       "prefix=tmp/,age=24h",
+		"S000_LIFECYCLE_INTERVAL":                    "45s",
+		"S000_LIFECYCLE_BATCH_SIZE":                  "75",
+		"S000_LIFECYCLE_MAX_RETRIES":                 "5",
+		"S000_LIFECYCLE_BACKOFF":                     "150ms",
+		"S000_LIFECYCLE_DRY_RUN":                     "true",
+		"S000_METRICS_PATH":                          "/internal-metrics",
+		"S000_TRACING_ENABLED":                       "true",
+		"S000_HTTP_READ_HEADER_TIMEOUT":              "2s",
+		"S000_HTTP_READ_TIMEOUT":                     "7s",
+		"S000_HTTP_WRITE_TIMEOUT":                    "9s",
+		"S000_HTTP_IDLE_TIMEOUT":                     "15s",
+		"S000_HTTP_MAX_HEADER_BYTES":                 "8192",
+		"S000_HTTP_DISABLE_KEEPALIVE":                "true",
+		"S000_HEAVY_OPS_WORKERS":                     "8",
+		"S000_HEAVY_OPS_QUEUE":                       "32",
+		"S000_TLS_ENABLED":                           "true",
+		"S000_TLS_CERT_FILE":                         "/etc/s000/tls.crt",
+		"S000_TLS_KEY_FILE":                          "/etc/s000/tls.key",
+		"S000_TLS_MIN_VERSION":                       "1.3",
+		"S000_AUTH_FAIL_THRESHOLD":                   "4",
+		"S000_AUTH_FAIL_WINDOW":                      "90s",
+		"S000_AUTH_BLOCK_DURATION":                   "2m",
+		"S000_UI_THEME":                              "graphite",
+		"S000_WEBSITE_ENABLED":                       "true",
+		"S000_WEBSITE_ADDR":                          ":9080",
+		"S000_WEBSITE_DOMAIN":                        "website.local",
+		"S000_FUNCTIONS_ENABLED":                     "true",
+		"S000_FUNCTIONS_DIR":                         "/var/lib/s000/functions",
+		"S000_FUNCTIONS_RUNTIME":                     "wasmer",
+		"S000_FUNCTIONS_MEMORY_LIMIT":                "128",
+		"S000_FUNCTIONS_CPU_LIMIT":                   "250ms",
+		"S000_FUNCTIONS_NETWORK_ALLOW":               "false",
+		"S000_FUNCTIONS_FS_ALLOW":                    "true",
+		"S000_FUNCTIONS_HOT_RELOAD":                  "true",
+		"S000_FUNCTIONS_RELOAD_INTERVAL":             "5s",
+		"S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE":       "120",
+		"S000_FUNCTIONS_MAX_CONCURRENT":              "8",
+		"S000_FUNCTIONS_DAILY_QUOTA":                 "10000",
+		"S000_FUNCTIONS_ALERT_ERROR_COUNT_THRESHOLD": "25",
 	}
 
 	cfg := LoadFromEnv(func(key string) string { return values[key] })
@@ -344,39 +360,55 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if cfg.FunctionsReloadInterval != 5*time.Second {
 		t.Fatalf("expected overridden functions reload interval 5s, got %s", cfg.FunctionsReloadInterval)
 	}
+	if cfg.FunctionsRateLimitPerMinute != 120 {
+		t.Fatalf("expected overridden functions rate limit per minute 120, got %d", cfg.FunctionsRateLimitPerMinute)
+	}
+	if cfg.FunctionsMaxConcurrent != 8 {
+		t.Fatalf("expected overridden functions max concurrent 8, got %d", cfg.FunctionsMaxConcurrent)
+	}
+	if cfg.FunctionsDailyQuota != 10000 {
+		t.Fatalf("expected overridden functions daily quota 10000, got %d", cfg.FunctionsDailyQuota)
+	}
+	if cfg.FunctionsAlertErrorCountThreshold != 25 {
+		t.Fatalf("expected overridden functions alert threshold 25, got %d", cfg.FunctionsAlertErrorCountThreshold)
+	}
 }
 
 func TestLoadFromEnvInvalidNumericAndDurationFallback(t *testing.T) {
 	t.Parallel()
 
 	values := map[string]string{
-		"S000_SHUTDOWN_TIMEOUT":          "oops",
-		"S000_MAX_INFLIGHT":              "-1",
-		"S000_AUTH_MAX_SKEW":             "nope",
-		"S000_LIFECYCLE_INTERVAL":        "invalid",
-		"S000_LIFECYCLE_BATCH_SIZE":      "0",
-		"S000_LIFECYCLE_MAX_RETRIES":     "-1",
-		"S000_LIFECYCLE_BACKOFF":         "bad",
-		"S000_LIFECYCLE_DRY_RUN":         "no-bool",
-		"S000_TRACING_ENABLED":           "not-bool",
-		"S000_HTTP_READ_TIMEOUT":         "bad",
-		"S000_HTTP_WRITE_TIMEOUT":        "bad",
-		"S000_HTTP_MAX_HEADER_BYTES":     "0",
-		"S000_HEAVY_OPS_WORKERS":         "0",
-		"S000_HEAVY_OPS_QUEUE":           "-1",
-		"S000_TLS_ENABLED":               "not-bool",
-		"S000_AUTH_FAIL_THRESHOLD":       "0",
-		"S000_AUTH_FAIL_WINDOW":          "bad",
-		"S000_AUTH_BLOCK_DURATION":       "bad",
-		"S000_UI_THEME":                  "",
-		"S000_WEBSITE_ENABLED":           "bad-bool",
-		"S000_FUNCTIONS_ENABLED":         "bad-bool",
-		"S000_FUNCTIONS_MEMORY_LIMIT":    "0",
-		"S000_FUNCTIONS_CPU_LIMIT":       "bad",
-		"S000_FUNCTIONS_NETWORK_ALLOW":   "bad-bool",
-		"S000_FUNCTIONS_FS_ALLOW":        "bad-bool",
-		"S000_FUNCTIONS_HOT_RELOAD":      "bad-bool",
-		"S000_FUNCTIONS_RELOAD_INTERVAL": "bad",
+		"S000_SHUTDOWN_TIMEOUT":                      "oops",
+		"S000_MAX_INFLIGHT":                          "-1",
+		"S000_AUTH_MAX_SKEW":                         "nope",
+		"S000_LIFECYCLE_INTERVAL":                    "invalid",
+		"S000_LIFECYCLE_BATCH_SIZE":                  "0",
+		"S000_LIFECYCLE_MAX_RETRIES":                 "-1",
+		"S000_LIFECYCLE_BACKOFF":                     "bad",
+		"S000_LIFECYCLE_DRY_RUN":                     "no-bool",
+		"S000_TRACING_ENABLED":                       "not-bool",
+		"S000_HTTP_READ_TIMEOUT":                     "bad",
+		"S000_HTTP_WRITE_TIMEOUT":                    "bad",
+		"S000_HTTP_MAX_HEADER_BYTES":                 "0",
+		"S000_HEAVY_OPS_WORKERS":                     "0",
+		"S000_HEAVY_OPS_QUEUE":                       "-1",
+		"S000_TLS_ENABLED":                           "not-bool",
+		"S000_AUTH_FAIL_THRESHOLD":                   "0",
+		"S000_AUTH_FAIL_WINDOW":                      "bad",
+		"S000_AUTH_BLOCK_DURATION":                   "bad",
+		"S000_UI_THEME":                              "",
+		"S000_WEBSITE_ENABLED":                       "bad-bool",
+		"S000_FUNCTIONS_ENABLED":                     "bad-bool",
+		"S000_FUNCTIONS_MEMORY_LIMIT":                "0",
+		"S000_FUNCTIONS_CPU_LIMIT":                   "bad",
+		"S000_FUNCTIONS_NETWORK_ALLOW":               "bad-bool",
+		"S000_FUNCTIONS_FS_ALLOW":                    "bad-bool",
+		"S000_FUNCTIONS_HOT_RELOAD":                  "bad-bool",
+		"S000_FUNCTIONS_RELOAD_INTERVAL":             "bad",
+		"S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE":       "-1",
+		"S000_FUNCTIONS_MAX_CONCURRENT":              "-1",
+		"S000_FUNCTIONS_DAILY_QUOTA":                 "-1",
+		"S000_FUNCTIONS_ALERT_ERROR_COUNT_THRESHOLD": "0",
 	}
 
 	cfg := LoadFromEnv(func(key string) string { return values[key] })
@@ -467,6 +499,18 @@ func TestLoadFromEnvInvalidNumericAndDurationFallback(t *testing.T) {
 	}
 	if cfg.FunctionsReloadInterval != 2*time.Second {
 		t.Fatalf("expected fallback functions reload interval 2s, got %s", cfg.FunctionsReloadInterval)
+	}
+	if cfg.FunctionsRateLimitPerMinute != 0 {
+		t.Fatalf("expected fallback functions rate limit per minute 0, got %d", cfg.FunctionsRateLimitPerMinute)
+	}
+	if cfg.FunctionsMaxConcurrent != 0 {
+		t.Fatalf("expected fallback functions max concurrent 0, got %d", cfg.FunctionsMaxConcurrent)
+	}
+	if cfg.FunctionsDailyQuota != 0 {
+		t.Fatalf("expected fallback functions daily quota 0, got %d", cfg.FunctionsDailyQuota)
+	}
+	if cfg.FunctionsAlertErrorCountThreshold != 10 {
+		t.Fatalf("expected fallback functions alert threshold 10, got %d", cfg.FunctionsAlertErrorCountThreshold)
 	}
 }
 

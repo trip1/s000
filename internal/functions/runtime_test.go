@@ -450,3 +450,149 @@ func TestManagerTriggerOrderingAndGuarantee(t *testing.T) {
 		t.Fatalf("expected deterministic order [first second], got %v", got)
 	}
 }
+
+func TestManagerRateLimitAndQuota(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.RateLimitPerMinute = 1
+	cfg.DailyInvocationQuota = 1
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	rt := &orderingRuntime{result: map[string][]byte{"fn": []byte(`{"continue":true}`)}}
+	mgr.SetRuntimeForTesting(rt)
+	if err := mgr.CreateFunction(Function{Name: "fn", Trigger: TriggerPutObjectPre, Runtime: RuntimeWazero, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create function failed: %v", err)
+	}
+
+	if _, err := mgr.Trigger(context.Background(), TriggerPutObjectPre, map[string]any{"ok": true}); err != nil {
+		t.Fatalf("first trigger should succeed: %v", err)
+	}
+	if _, err := mgr.Trigger(context.Background(), TriggerPutObjectPre, map[string]any{"ok": true}); err == nil {
+		t.Fatal("expected second trigger to fail due to rate limit/quota")
+	}
+
+	metrics := mgr.Metrics()
+	if len(metrics) == 0 {
+		t.Fatal("expected metrics to be recorded")
+	}
+	if metrics[0].RateLimited == 0 && metrics[0].QuotaExceeded == 0 {
+		t.Fatalf("expected rate-limited or quota-exceeded counters, got %#v", metrics[0])
+	}
+}
+
+type blockingCompiled struct{}
+
+func (blockingCompiled) ID() string { return "blocking" }
+
+type blockingRuntime struct {
+	release <-chan struct{}
+}
+
+func (b *blockingRuntime) Init(context.Context, RuntimeConfig) error { return nil }
+func (b *blockingRuntime) Compile(context.Context, []byte) (CompiledModule, error) {
+	return blockingCompiled{}, nil
+}
+
+type blockingInstance struct {
+	release <-chan struct{}
+}
+
+func (b *blockingRuntime) Instantiate(context.Context, CompiledModule, Imports) (Instance, error) {
+	return &blockingInstance{release: b.release}, nil
+}
+func (b *blockingRuntime) SupportsNetworking() bool { return false }
+func (b *blockingRuntime) Close() error             { return nil }
+
+func (i *blockingInstance) Invoke(context.Context, string, []byte) ([]byte, error) {
+	<-i.release
+	return []byte(`{"continue":true}`), nil
+}
+
+func (i *blockingInstance) Close() error { return nil }
+
+func TestManagerConcurrentLimit(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.MaxConcurrent = 1
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	mgr.SetRuntimeForTesting(&blockingRuntime{release: release})
+	if err := mgr.CreateFunction(Function{Name: "fn", Trigger: TriggerPutObjectPre, Runtime: RuntimeWazero, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create function failed: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, triggerErr := mgr.Trigger(context.Background(), TriggerPutObjectPre, map[string]any{"id": 1})
+		firstDone <- triggerErr
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	if _, err := mgr.Trigger(context.Background(), TriggerPutObjectPre, map[string]any{"id": 2}); err == nil {
+		t.Fatal("expected concurrent limit error")
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first trigger should succeed, got %v", err)
+	}
+
+	metrics := mgr.Metrics()
+	if len(metrics) == 0 || metrics[0].ConcurrentDenied == 0 {
+		t.Fatalf("expected concurrent denied metric > 0, got %#v", metrics)
+	}
+}
+
+func TestManagerAlertsAndAdditionalTriggers(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.AlertErrorCountThreshold = 1
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	rt := &orderingRuntime{result: map[string][]byte{"f-http": []byte(`{"continue":true}`), "f-cron": []byte(`{"continue":true}`)}}
+	mgr.SetRuntimeForTesting(rt)
+
+	if err := mgr.CreateFunction(Function{Name: "f-http", Trigger: TriggerHTTPPre, Runtime: RuntimeWazero, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create http function failed: %v", err)
+	}
+	if err := mgr.CreateFunction(Function{Name: "f-cron", Trigger: TriggerCronTick, Runtime: RuntimeWazero, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create cron function failed: %v", err)
+	}
+
+	if _, err := mgr.TriggerHTTP(context.Background(), TriggerHTTPPre, HTTPEvent{Method: "GET", Path: "/x"}); err != nil {
+		t.Fatalf("http trigger failed: %v", err)
+	}
+	if _, err := mgr.TriggerCron(context.Background(), TriggerCronTick, CronEvent{Name: "nightly"}); err != nil {
+		t.Fatalf("cron trigger failed: %v", err)
+	}
+
+	rt.mu.Lock()
+	invocations := append([]string(nil), rt.order...)
+	rt.mu.Unlock()
+	if len(invocations) != 2 {
+		t.Fatalf("expected 2 trigger invocations, got %d (%v)", len(invocations), invocations)
+	}
+
+	// Manually mark an error path by invoking non-existing function.
+	if _, err := mgr.InvokeFunction(context.Background(), "missing", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected invoke missing function error")
+	}
+
+	alerts := mgr.Alerts()
+	if len(alerts) != 0 && alerts[0].Reason == "" {
+		t.Fatalf("expected alert reason to be non-empty when alerts present, got %#v", alerts)
+	}
+}
