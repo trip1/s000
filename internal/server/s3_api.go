@@ -446,12 +446,14 @@ func (a *s3API) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buck
 func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if !a.runHeavy(w, r, bucket, key, func() {
 		if a.functions != nil && a.functions.Enabled() {
-			preResult, err := a.functions.Trigger(r.Context(), functions.TriggerPutObjectPre, map[string]any{
-				"event":  "PutObject",
-				"phase":  "pre",
-				"bucket": bucket,
-				"key":    key,
-				"size":   r.ContentLength,
+			preResult, err := a.functions.TriggerS3(r.Context(), functions.TriggerPutObjectPre, functions.S3Event{
+				Operation: "PutObject",
+				Phase:     "pre",
+				Bucket:    bucket,
+				Key:       key,
+				Size:      r.ContentLength,
+				Method:    r.Method,
+				RequestID: RequestIDFromContext(r.Context()),
 			})
 			if err != nil {
 				writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "Function pre-hook failed.", Resource: "/" + bucket + "/" + key})
@@ -513,15 +515,14 @@ func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, 
 		w.Header().Set("ETag", quotedETag(blobMeta.MD5Hex))
 		w.Header().Set("x-amz-checksum-sha256", blobMeta.SHA256)
 		if a.functions != nil && a.functions.Enabled() {
-			if _, err := a.functions.Trigger(r.Context(), functions.TriggerPutObjectPost, map[string]any{
-				"event":      "PutObject",
-				"phase":      "post",
-				"bucket":     bucket,
-				"key":        key,
-				"size":       blobMeta.Size,
-				"etag":       blobMeta.MD5Hex,
-				"checksum":   blobMeta.SHA256,
-				"created_at": blobMeta.CreatedAt,
+			if _, err := a.functions.TriggerS3(r.Context(), functions.TriggerPutObjectPost, functions.S3Event{
+				Operation: "PutObject",
+				Phase:     "post",
+				Bucket:    bucket,
+				Key:       key,
+				Size:      blobMeta.Size,
+				Method:    r.Method,
+				RequestID: RequestIDFromContext(r.Context()),
 			}); err != nil {
 				slog.Warn("functions post-hook failed", "bucket", bucket, "key", key, "error", err)
 			}

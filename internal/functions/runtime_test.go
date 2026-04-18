@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -363,5 +364,89 @@ func TestManagerReloadFromDirCreatesAndVersions(t *testing.T) {
 	}
 	if def.Version != 2 || def.ActiveVersion != 2 || string(def.Module) != "v2" {
 		t.Fatalf("expected v2 active with module v2, got version=%d active=%d module=%q", def.Version, def.ActiveVersion, string(def.Module))
+	}
+}
+
+type orderingCompiled struct{}
+
+func (orderingCompiled) ID() string { return "ordering" }
+
+type orderingRuntime struct {
+	mu     sync.Mutex
+	order  []string
+	result map[string][]byte
+}
+
+func (o *orderingRuntime) Init(context.Context, RuntimeConfig) error { return nil }
+func (o *orderingRuntime) Compile(context.Context, []byte) (CompiledModule, error) {
+	return orderingCompiled{}, nil
+}
+
+type orderingInstance struct {
+	name string
+	rt   *orderingRuntime
+}
+
+func (o *orderingRuntime) Instantiate(_ context.Context, _ CompiledModule, imports Imports) (Instance, error) {
+	name := imports.Environment["S000_FUNCTION_NAME"]
+	return &orderingInstance{name: name, rt: o}, nil
+}
+func (o *orderingRuntime) SupportsNetworking() bool { return false }
+func (o *orderingRuntime) Close() error             { return nil }
+
+func (i *orderingInstance) Invoke(_ context.Context, _ string, _ []byte) ([]byte, error) {
+	i.rt.mu.Lock()
+	defer i.rt.mu.Unlock()
+	i.rt.order = append(i.rt.order, i.name)
+	if out, ok := i.rt.result[i.name]; ok {
+		return out, nil
+	}
+	return []byte(`{"continue":true}`), nil
+}
+
+func (i *orderingInstance) Close() error { return nil }
+
+func TestManagerTriggerOrderingAndGuarantee(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	rt := &orderingRuntime{result: map[string][]byte{
+		"first":  []byte(`{"continue":true}`),
+		"second": []byte(`{"continue":false}`),
+		"third":  []byte(`{"continue":true}`),
+	}}
+	mgr.SetRuntimeForTesting(rt)
+
+	if err := mgr.CreateFunction(Function{Name: "third", Trigger: TriggerPutObjectPre, Runtime: RuntimeWazero, Priority: 20, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create third failed: %v", err)
+	}
+	if err := mgr.CreateFunction(Function{Name: "second", Trigger: TriggerPutObjectPre, Runtime: RuntimeWazero, Priority: 10, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create second failed: %v", err)
+	}
+	if err := mgr.CreateFunction(Function{Name: "first", Trigger: TriggerPutObjectPre, Runtime: RuntimeWazero, Priority: 10, Enabled: true, Module: []byte("m")}); err != nil {
+		t.Fatalf("create first failed: %v", err)
+	}
+
+	result, err := mgr.Trigger(context.Background(), TriggerPutObjectPre, map[string]any{"k": "v"})
+	if err != nil {
+		t.Fatalf("trigger failed: %v", err)
+	}
+	if result.Continue {
+		t.Fatal("expected continue=false due to second function denial")
+	}
+
+	rt.mu.Lock()
+	got := append([]string(nil), rt.order...)
+	rt.mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 invocations due to short-circuit guarantee, got %d (%v)", len(got), got)
+	}
+	if got[0] != "first" || got[1] != "second" {
+		t.Fatalf("expected deterministic order [first second], got %v", got)
 	}
 }

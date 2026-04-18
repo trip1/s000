@@ -114,10 +114,17 @@ When `S000_FUNCTIONS_ENABLED=true`, authenticated function management endpoints 
 Function payload fields:
 
 - `name` (string)
-- `runtime` (currently `wasmer`)
-- `trigger` (`onPutObjectPre` or `onPutObjectPost`)
+- `runtime` (`wazero` default, or `wasmer`)
+- `trigger` (`onPutObjectPre`, `onPutObjectPost`, `onHTTPPre`, `onHTTPPost`, `onCronTick`)
+- `priority` (int, lower runs first; default `100`)
 - `enabled` (bool)
 - `module_base64` (base64-encoded wasm module bytes)
+
+Dispatch ordering/guarantees:
+
+- Deterministic order: `priority` ascending, then function name ascending.
+- Dispatch is sequential per trigger event.
+- If a function returns `{"continue":false}`, dispatch short-circuits and remaining functions are skipped.
 
 Hot reload manifest mode (`S000_FUNCTIONS_HOT_RELOAD=true`):
 

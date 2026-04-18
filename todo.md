@@ -289,7 +289,7 @@ Full WASI support ("Docker at the edge"):
 - [x] Define initial event payload contract for `PutObject` pre/post hooks
 - [x] Implement event dispatch to functions
 - [x] Add pre/post hooks for S3 operations (`onPutObjectPre`, `onPutObjectPost`)
-- [ ] Implement event ordering and guarantees
+- [x] Implement event ordering and guarantees (priority asc, name asc, short-circuit on `continue=false`)
 
 #### Phase 4: Development Experience
 - [ ] Add function templates (hello world, image processor, http-proxy)

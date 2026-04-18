@@ -18,6 +18,7 @@ type Function struct {
 	Name          string    `json:"name"`
 	Runtime       string    `json:"runtime"`
 	Trigger       string    `json:"trigger"`
+	Priority      int       `json:"priority"`
 	Enabled       bool      `json:"enabled"`
 	Module        []byte    `json:"-"`
 	Version       int       `json:"version"`
@@ -30,6 +31,7 @@ type FunctionSummary struct {
 	Name          string    `json:"name"`
 	Runtime       string    `json:"runtime"`
 	Trigger       string    `json:"trigger"`
+	Priority      int       `json:"priority"`
 	Enabled       bool      `json:"enabled"`
 	Version       int       `json:"version"`
 	ActiveVersion int       `json:"active_version"`
@@ -43,6 +45,7 @@ type FunctionVersionSummary struct {
 	Version   int       `json:"version"`
 	Runtime   string    `json:"runtime"`
 	Trigger   string    `json:"trigger"`
+	Priority  int       `json:"priority"`
 	Enabled   bool      `json:"enabled"`
 	SizeBytes int       `json:"size_bytes"`
 	CreatedAt time.Time `json:"created_at"`
@@ -78,6 +81,10 @@ func validateTrigger(trigger string) error {
 	switch strings.TrimSpace(trigger) {
 	case TriggerPutObjectPre, TriggerPutObjectPost:
 		return nil
+	case TriggerHTTPPre, TriggerHTTPPost:
+		return nil
+	case TriggerCronTick:
+		return nil
 	default:
 		return fmt.Errorf("functions: unsupported trigger %q", trigger)
 	}
@@ -98,6 +105,9 @@ func (r *Registry) Create(def Function) error {
 	}
 	if len(def.Module) == 0 {
 		return fmt.Errorf("functions: module is required")
+	}
+	if def.Priority <= 0 {
+		def.Priority = 100
 	}
 	now := r.now()
 	def.Name = name
@@ -138,6 +148,9 @@ func (r *Registry) Update(name string, def Function) error {
 	}
 	if def.Runtime == "" {
 		def.Runtime = cur.Runtime
+	}
+	if def.Priority <= 0 {
+		def.Priority = cur.Priority
 	}
 	if len(def.Module) == 0 {
 		def.Module = cur.Module
@@ -196,6 +209,7 @@ func (r *Registry) List() []FunctionSummary {
 			Name:          v.Name,
 			Runtime:       v.Runtime,
 			Trigger:       v.Trigger,
+			Priority:      v.Priority,
 			Enabled:       v.Enabled,
 			Version:       v.Version,
 			ActiveVersion: rec.active,
@@ -204,7 +218,12 @@ func (r *Registry) List() []FunctionSummary {
 			UpdatedAt:     rec.updatedAt,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].Version < out[j].Version
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -224,7 +243,15 @@ func (r *Registry) ByTrigger(trigger string) []Function {
 			out = append(out, v)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority < out[j].Priority
+		}
+		if out[i].Name == out[j].Name {
+			return out[i].Version < out[j].Version
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -243,6 +270,7 @@ func (r *Registry) ListVersions(name string) ([]FunctionVersionSummary, error) {
 			Version:   v.Version,
 			Runtime:   v.Runtime,
 			Trigger:   v.Trigger,
+			Priority:  v.Priority,
 			Enabled:   v.Enabled,
 			SizeBytes: len(v.Module),
 			CreatedAt: v.CreatedAt,

@@ -15,6 +15,7 @@ type functionRequest struct {
 	Name         string `json:"name"`
 	Runtime      string `json:"runtime"`
 	Trigger      string `json:"trigger"`
+	Priority     int    `json:"priority"`
 	Enabled      bool   `json:"enabled"`
 	ModuleBase64 string `json:"module_base64"`
 }
@@ -48,11 +49,12 @@ func functionsCollectionHandler(opts Options) http.HandlerFunc {
 				req.Runtime = functions.RuntimeWazero
 			}
 			if err := mgr.CreateFunction(functions.Function{
-				Name:    req.Name,
-				Runtime: req.Runtime,
-				Trigger: req.Trigger,
-				Enabled: req.Enabled,
-				Module:  module,
+				Name:     req.Name,
+				Runtime:  req.Runtime,
+				Trigger:  req.Trigger,
+				Priority: req.Priority,
+				Enabled:  req.Enabled,
+				Module:   module,
 			}); err != nil {
 				http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 				return
@@ -146,11 +148,12 @@ func functionsItemHandler(opts Options) http.HandlerFunc {
 				req.Runtime = functions.RuntimeWazero
 			}
 			if err := mgr.UpdateFunction(name, functions.Function{
-				Name:    name,
-				Runtime: req.Runtime,
-				Trigger: req.Trigger,
-				Enabled: req.Enabled,
-				Module:  module,
+				Name:     name,
+				Runtime:  req.Runtime,
+				Trigger:  req.Trigger,
+				Priority: req.Priority,
+				Enabled:  req.Enabled,
+				Module:   module,
 			}); err != nil {
 				if errors.Is(err, functions.ErrNotImplemented) {
 					http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotImplemented)
@@ -178,6 +181,7 @@ func toFunctionResponse(def functions.Function) map[string]any {
 		"name":           def.Name,
 		"runtime":        def.Runtime,
 		"trigger":        def.Trigger,
+		"priority":       def.Priority,
 		"enabled":        def.Enabled,
 		"version":        def.Version,
 		"active_version": def.ActiveVersion,

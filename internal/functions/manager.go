@@ -183,6 +183,36 @@ func (m *Manager) Trigger(ctx context.Context, trigger string, payload any) (Inv
 	return result, nil
 }
 
+func (m *Manager) TriggerS3(ctx context.Context, trigger string, event S3Event) (InvocationResult, error) {
+	if event.Type == "" {
+		event.Type = EventTypeS3
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	return m.Trigger(ctx, trigger, event)
+}
+
+func (m *Manager) TriggerHTTP(ctx context.Context, trigger string, event HTTPEvent) (InvocationResult, error) {
+	if event.Type == "" {
+		event.Type = EventTypeHTTP
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	return m.Trigger(ctx, trigger, event)
+}
+
+func (m *Manager) TriggerCron(ctx context.Context, trigger string, event CronEvent) (InvocationResult, error) {
+	if event.Type == "" {
+		event.Type = EventTypeCron
+	}
+	if event.Scheduled.IsZero() {
+		event.Scheduled = time.Now().UTC()
+	}
+	return m.Trigger(ctx, trigger, event)
+}
+
 func (m *Manager) Close() error {
 	if m.reloadCancel != nil {
 		m.reloadCancel()
@@ -200,6 +230,7 @@ type fileFunctionSpec struct {
 	Name         string `json:"name"`
 	Runtime      string `json:"runtime"`
 	Trigger      string `json:"trigger"`
+	Priority     int    `json:"priority"`
 	Enabled      bool   `json:"enabled"`
 	ModulePath   string `json:"module_path"`
 	ModuleBase64 string `json:"module_base64"`
@@ -245,22 +276,24 @@ func (m *Manager) reloadManifest(manifestPath string) error {
 	cur, getErr := m.registry.Get(name)
 	if getErr != nil {
 		return m.registry.Create(Function{
-			Name:    name,
-			Runtime: spec.Runtime,
-			Trigger: spec.Trigger,
-			Enabled: spec.Enabled,
-			Module:  module,
+			Name:     name,
+			Runtime:  spec.Runtime,
+			Trigger:  spec.Trigger,
+			Priority: spec.Priority,
+			Enabled:  spec.Enabled,
+			Module:   module,
 		})
 	}
-	if cur.Runtime == spec.Runtime && cur.Trigger == spec.Trigger && cur.Enabled == spec.Enabled && bytesEqual(cur.Module, module) {
+	if cur.Runtime == spec.Runtime && cur.Trigger == spec.Trigger && cur.Priority == spec.Priority && cur.Enabled == spec.Enabled && bytesEqual(cur.Module, module) {
 		return nil
 	}
 	return m.registry.Update(name, Function{
-		Name:    name,
-		Runtime: spec.Runtime,
-		Trigger: spec.Trigger,
-		Enabled: spec.Enabled,
-		Module:  module,
+		Name:     name,
+		Runtime:  spec.Runtime,
+		Trigger:  spec.Trigger,
+		Priority: spec.Priority,
+		Enabled:  spec.Enabled,
+		Module:   module,
 	})
 }
 

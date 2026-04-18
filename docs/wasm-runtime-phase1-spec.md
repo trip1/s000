@@ -116,3 +116,12 @@ If startup validation fails, server exits with error.
 - Runtime factory tests (`wazero` + `wasmer` supported, unknown runtime rejected).
 - Manager lifecycle tests (`Start`, `Close`, and no-op behavior when disabled).
 - Wasmer adapter tests for compile/instantiate scaffold behavior and deterministic errors.
+
+## Event Ordering Guarantees
+
+Function dispatch ordering is deterministic:
+
+1. `priority` ascending (lower first)
+2. function name ascending (tie-break)
+
+Dispatch is sequential. If a function returns `{ "continue": false }`, remaining functions for that trigger are not invoked.
