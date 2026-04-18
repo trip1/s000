@@ -180,10 +180,17 @@ func main() {
 		ReadyCheck: func(ctx context.Context) error {
 			return metadataConnections.Ping(ctx)
 		},
-		Tracing:      observability.NoopTraceHooks(),
-		TracingOn:    cfg.TracingEnabled,
-		BucketRegion: "us-east-1",
-		Functions:    functionsManager,
+		Tracing:                           observability.NoopTraceHooks(),
+		TracingOn:                         cfg.TracingEnabled,
+		BucketRegion:                      "us-east-1",
+		Functions:                         functionsManager,
+		FunctionsHTTPPublic:               cfg.FunctionsHTTPPublic,
+		FunctionsHTTPCORSAllowOrigin:      cfg.FunctionsHTTPCORSAllowOrigin,
+		FunctionsHTTPCORSAllowMethods:     cfg.FunctionsHTTPCORSAllowMethods,
+		FunctionsHTTPCORSAllowHeaders:     cfg.FunctionsHTTPCORSAllowHeaders,
+		FunctionsHTTPCORSExposeHeaders:    cfg.FunctionsHTTPCORSExposeHeaders,
+		FunctionsHTTPCORSMaxAge:           cfg.FunctionsHTTPCORSMaxAge,
+		FunctionsHTTPCORSAllowCredentials: cfg.FunctionsHTTPCORSAllowCredentials,
 	})
 	httpServer := server.NewHTTPServerWithOptions(cfg.Addr, handler, server.HTTPServerOptions{
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,

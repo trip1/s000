@@ -48,6 +48,13 @@ const (
 	defaultFunctionsNetworkAllow             = true
 	defaultFunctionsFSAllow                  = false
 	defaultFunctionsHotReload                = false
+	defaultFunctionsHTTPPublic               = false
+	defaultFunctionsHTTPCORSAllowOrigin      = ""
+	defaultFunctionsHTTPCORSAllowMethods     = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+	defaultFunctionsHTTPCORSAllowHeaders     = "Content-Type, Authorization"
+	defaultFunctionsHTTPCORSExposeHeaders    = ""
+	defaultFunctionsHTTPCORSMaxAge           = 600
+	defaultFunctionsHTTPCORSAllowCredentials = false
 	defaultFunctionsReloadInterval           = 2 * time.Second
 	defaultFunctionsRateLimitPerMinute       = 0
 	defaultFunctionsMaxConcurrent            = 0
@@ -104,6 +111,13 @@ type Config struct {
 	FunctionsNetworkAllow             bool
 	FunctionsFSAllow                  bool
 	FunctionsHotReload                bool
+	FunctionsHTTPPublic               bool
+	FunctionsHTTPCORSAllowOrigin      string
+	FunctionsHTTPCORSAllowMethods     string
+	FunctionsHTTPCORSAllowHeaders     string
+	FunctionsHTTPCORSExposeHeaders    string
+	FunctionsHTTPCORSMaxAge           int
+	FunctionsHTTPCORSAllowCredentials bool
 	FunctionsReloadInterval           time.Duration
 	FunctionsRateLimitPerMinute       int
 	FunctionsMaxConcurrent            int
@@ -157,6 +171,13 @@ func LoadFromEnv(getenv func(string) string) Config {
 		FunctionsNetworkAllow:             defaultFunctionsNetworkAllow,
 		FunctionsFSAllow:                  defaultFunctionsFSAllow,
 		FunctionsHotReload:                defaultFunctionsHotReload,
+		FunctionsHTTPPublic:               defaultFunctionsHTTPPublic,
+		FunctionsHTTPCORSAllowOrigin:      defaultFunctionsHTTPCORSAllowOrigin,
+		FunctionsHTTPCORSAllowMethods:     defaultFunctionsHTTPCORSAllowMethods,
+		FunctionsHTTPCORSAllowHeaders:     defaultFunctionsHTTPCORSAllowHeaders,
+		FunctionsHTTPCORSExposeHeaders:    defaultFunctionsHTTPCORSExposeHeaders,
+		FunctionsHTTPCORSMaxAge:           defaultFunctionsHTTPCORSMaxAge,
+		FunctionsHTTPCORSAllowCredentials: defaultFunctionsHTTPCORSAllowCredentials,
 		FunctionsReloadInterval:           defaultFunctionsReloadInterval,
 		FunctionsRateLimitPerMinute:       defaultFunctionsRateLimitPerMinute,
 		FunctionsMaxConcurrent:            defaultFunctionsMaxConcurrent,
@@ -364,6 +385,33 @@ func LoadFromEnv(getenv func(string) string) Config {
 	if v := getenv("S000_FUNCTIONS_HOT_RELOAD"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.FunctionsHotReload = b
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_PUBLIC"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.FunctionsHTTPPublic = b
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN"); v != "" {
+		cfg.FunctionsHTTPCORSAllowOrigin = v
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS"); v != "" {
+		cfg.FunctionsHTTPCORSAllowMethods = v
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS"); v != "" {
+		cfg.FunctionsHTTPCORSAllowHeaders = v
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS"); v != "" {
+		cfg.FunctionsHTTPCORSExposeHeaders = v
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_MAX_AGE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.FunctionsHTTPCORSMaxAge = n
+		}
+	}
+	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.FunctionsHTTPCORSAllowCredentials = b
 		}
 	}
 	if v := getenv("S000_FUNCTIONS_RELOAD_INTERVAL"); v != "" {

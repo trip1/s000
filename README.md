@@ -97,6 +97,13 @@ Selected environment variables:
 - `S000_FUNCTIONS_NETWORK_ALLOW` (default `true`)
 - `S000_FUNCTIONS_FS_ALLOW` (default `false`)
 - `S000_FUNCTIONS_HOT_RELOAD` (default `false`)
+- `S000_FUNCTIONS_HTTP_PUBLIC` (default `false`; when `true`, `/fn/*` is publicly invokable without SigV4)
+- `S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN` (default empty/disabled; set `*` or comma-separated origins)
+- `S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS` (default `GET, POST, PUT, PATCH, DELETE, OPTIONS`)
+- `S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS` (default `Content-Type, Authorization`)
+- `S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS` (default empty)
+- `S000_FUNCTIONS_HTTP_CORS_MAX_AGE` (default `600` seconds)
+- `S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS` (default `false`)
 - `S000_FUNCTIONS_RELOAD_INTERVAL` (default `2s`)
 - `S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE` (default `0` = disabled)
 - `S000_FUNCTIONS_MAX_CONCURRENT` (default `0` = disabled)
@@ -130,6 +137,12 @@ When `S000_FUNCTIONS_ENABLED=true`, authenticated function management endpoints 
 - `GET /functions/metrics` - function invocation metrics.
 - `GET /functions/alerts` - current function alerts.
 - `GET /functions/logs` - recent function logs (`?limit=50`).
+
+Optional function HTTP gateway:
+
+- `ANY /fn/{name}[/{path...}]` - invoke a function using browser/native HTTP methods and map function output to HTTP response.
+- By default this route still requires SigV4 auth; set `S000_FUNCTIONS_HTTP_PUBLIC=true` to allow unsigned public access.
+- Set CORS env vars above to support cross-origin browser calls to `/fn/*`.
 
 Function payload fields:
 

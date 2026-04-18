@@ -139,6 +139,27 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.FunctionsHotReload {
 		t.Fatal("expected functions hot reload disabled by default")
 	}
+	if cfg.FunctionsHTTPPublic {
+		t.Fatal("expected functions http public disabled by default")
+	}
+	if cfg.FunctionsHTTPCORSAllowOrigin != "" {
+		t.Fatalf("expected default functions http cors allow origin empty, got %q", cfg.FunctionsHTTPCORSAllowOrigin)
+	}
+	if cfg.FunctionsHTTPCORSAllowMethods != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
+		t.Fatalf("expected default functions http cors allow methods, got %q", cfg.FunctionsHTTPCORSAllowMethods)
+	}
+	if cfg.FunctionsHTTPCORSAllowHeaders != "Content-Type, Authorization" {
+		t.Fatalf("expected default functions http cors allow headers, got %q", cfg.FunctionsHTTPCORSAllowHeaders)
+	}
+	if cfg.FunctionsHTTPCORSExposeHeaders != "" {
+		t.Fatalf("expected default functions http cors expose headers empty, got %q", cfg.FunctionsHTTPCORSExposeHeaders)
+	}
+	if cfg.FunctionsHTTPCORSMaxAge != 600 {
+		t.Fatalf("expected default functions http cors max age 600, got %d", cfg.FunctionsHTTPCORSMaxAge)
+	}
+	if cfg.FunctionsHTTPCORSAllowCredentials {
+		t.Fatal("expected default functions http cors allow credentials false")
+	}
 	if cfg.FunctionsReloadInterval != 2*time.Second {
 		t.Fatalf("expected default functions reload interval 2s, got %s", cfg.FunctionsReloadInterval)
 	}
@@ -207,6 +228,13 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 		"S000_FUNCTIONS_NETWORK_ALLOW":               "false",
 		"S000_FUNCTIONS_FS_ALLOW":                    "true",
 		"S000_FUNCTIONS_HOT_RELOAD":                  "true",
+		"S000_FUNCTIONS_HTTP_PUBLIC":                 "true",
+		"S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN":      "https://app.example.com,https://www.example.com",
+		"S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS":     "GET,POST",
+		"S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS":     "Content-Type,X-Request-Id",
+		"S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS":    "X-Trace-Id",
+		"S000_FUNCTIONS_HTTP_CORS_MAX_AGE":           "1200",
+		"S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS": "true",
 		"S000_FUNCTIONS_RELOAD_INTERVAL":             "5s",
 		"S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE":       "120",
 		"S000_FUNCTIONS_MAX_CONCURRENT":              "8",
@@ -357,6 +385,27 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if !cfg.FunctionsHotReload {
 		t.Fatal("expected overridden functions hot reload true")
 	}
+	if !cfg.FunctionsHTTPPublic {
+		t.Fatal("expected overridden functions http public true")
+	}
+	if cfg.FunctionsHTTPCORSAllowOrigin != "https://app.example.com,https://www.example.com" {
+		t.Fatalf("expected overridden functions http cors allow origin, got %q", cfg.FunctionsHTTPCORSAllowOrigin)
+	}
+	if cfg.FunctionsHTTPCORSAllowMethods != "GET,POST" {
+		t.Fatalf("expected overridden functions http cors allow methods GET,POST, got %q", cfg.FunctionsHTTPCORSAllowMethods)
+	}
+	if cfg.FunctionsHTTPCORSAllowHeaders != "Content-Type,X-Request-Id" {
+		t.Fatalf("expected overridden functions http cors allow headers, got %q", cfg.FunctionsHTTPCORSAllowHeaders)
+	}
+	if cfg.FunctionsHTTPCORSExposeHeaders != "X-Trace-Id" {
+		t.Fatalf("expected overridden functions http cors expose headers X-Trace-Id, got %q", cfg.FunctionsHTTPCORSExposeHeaders)
+	}
+	if cfg.FunctionsHTTPCORSMaxAge != 1200 {
+		t.Fatalf("expected overridden functions http cors max age 1200, got %d", cfg.FunctionsHTTPCORSMaxAge)
+	}
+	if !cfg.FunctionsHTTPCORSAllowCredentials {
+		t.Fatal("expected overridden functions http cors allow credentials true")
+	}
 	if cfg.FunctionsReloadInterval != 5*time.Second {
 		t.Fatalf("expected overridden functions reload interval 5s, got %s", cfg.FunctionsReloadInterval)
 	}
@@ -404,6 +453,9 @@ func TestLoadFromEnvInvalidNumericAndDurationFallback(t *testing.T) {
 		"S000_FUNCTIONS_NETWORK_ALLOW":               "bad-bool",
 		"S000_FUNCTIONS_FS_ALLOW":                    "bad-bool",
 		"S000_FUNCTIONS_HOT_RELOAD":                  "bad-bool",
+		"S000_FUNCTIONS_HTTP_PUBLIC":                 "bad-bool",
+		"S000_FUNCTIONS_HTTP_CORS_MAX_AGE":           "-1",
+		"S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS": "bad-bool",
 		"S000_FUNCTIONS_RELOAD_INTERVAL":             "bad",
 		"S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE":       "-1",
 		"S000_FUNCTIONS_MAX_CONCURRENT":              "-1",
@@ -496,6 +548,15 @@ func TestLoadFromEnvInvalidNumericAndDurationFallback(t *testing.T) {
 	}
 	if cfg.FunctionsHotReload {
 		t.Fatal("expected fallback functions hot reload false")
+	}
+	if cfg.FunctionsHTTPPublic {
+		t.Fatal("expected fallback functions http public false")
+	}
+	if cfg.FunctionsHTTPCORSMaxAge != 600 {
+		t.Fatalf("expected fallback functions http cors max age 600, got %d", cfg.FunctionsHTTPCORSMaxAge)
+	}
+	if cfg.FunctionsHTTPCORSAllowCredentials {
+		t.Fatal("expected fallback functions http cors allow credentials false")
 	}
 	if cfg.FunctionsReloadInterval != 2*time.Second {
 		t.Fatalf("expected fallback functions reload interval 2s, got %s", cfg.FunctionsReloadInterval)

@@ -136,7 +136,7 @@ func withRecovery(next http.Handler) http.Handler {
 
 func withAuthGate(next http.Handler, opts Options) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if shouldBypassGuards(r.URL.Path, opts.MetricsPath) {
+		if shouldBypassAuth(r.URL.Path, opts.MetricsPath, opts.FunctionsHTTPPublic) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -309,11 +309,24 @@ func shouldBypassGuards(path string, metricsPath string) bool {
 	return false
 }
 
+func shouldBypassAuth(path string, metricsPath string, functionsHTTPPublic bool) bool {
+	if shouldBypassGuards(path, metricsPath) {
+		return true
+	}
+	if functionsHTTPPublic && strings.HasPrefix(path, "/fn/") {
+		return true
+	}
+	return false
+}
+
 func shouldBypassFunctionHooks(path string, metricsPath string) bool {
 	if shouldBypassGuards(path, metricsPath) {
 		return true
 	}
 	if strings.HasPrefix(path, "/functions") {
+		return true
+	}
+	if strings.HasPrefix(path, "/fn/") {
 		return true
 	}
 	return false

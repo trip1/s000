@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,42 @@ func (f fakeRuntime) Instantiate(context.Context, functions.CompiledModule, func
 }
 func (f fakeRuntime) SupportsNetworking() bool { return true }
 func (f fakeRuntime) Close() error             { return nil }
+
+type captureRuntime struct {
+	mu          sync.Mutex
+	output      []byte
+	lastPayload []byte
+}
+
+type captureInstance struct {
+	rt *captureRuntime
+}
+
+func (c *captureRuntime) Init(context.Context, functions.RuntimeConfig) error { return nil }
+func (c *captureRuntime) Compile(context.Context, []byte) (functions.CompiledModule, error) {
+	return fakeCompiled{}, nil
+}
+func (c *captureRuntime) Instantiate(context.Context, functions.CompiledModule, functions.Imports) (functions.Instance, error) {
+	return &captureInstance{rt: c}, nil
+}
+func (c *captureRuntime) SupportsNetworking() bool { return true }
+func (c *captureRuntime) Close() error             { return nil }
+
+func (c *captureRuntime) payload() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.lastPayload...)
+}
+
+func (i *captureInstance) Invoke(_ context.Context, _ string, payload []byte) ([]byte, error) {
+	i.rt.mu.Lock()
+	i.rt.lastPayload = append([]byte(nil), payload...)
+	out := append([]byte(nil), i.rt.output...)
+	i.rt.mu.Unlock()
+	return out, nil
+}
+
+func (i *captureInstance) Close() error { return nil }
 
 func TestFunctionsCRUDAPI(t *testing.T) {
 	t.Parallel()
@@ -284,6 +321,155 @@ func TestPutObjectRateLimitFlowAndAlerts(t *testing.T) {
 	}
 }
 
+func TestFunctionsHTTPPassthroughInvokeAPI(t *testing.T) {
+	t.Parallel()
+
+	rt := &captureRuntime{output: []byte(`{"continue":true,"output":{"status":201,"headers":{"X-Test":"ok","Content-Type":"application/json"},"body":{"message":"hello world"}}}`)}
+	h, _ := testHandlerWithCustomRuntime(t, rt)
+
+	moduleB64 := base64.StdEncoding.EncodeToString([]byte("wasm-module"))
+	body := `{"name":"hello-world-js","runtime":"wazero","trigger":"onHTTPPre","enabled":true,"module_base64":"` + moduleB64 + `"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/functions", bytes.NewBufferString(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	invokeReq := httptest.NewRequest(http.MethodPost, "/fn/hello-world-js/demo/path?mode=test", bytes.NewBufferString(`{"name":"trip"}`))
+	invokeReq.Header.Set("Content-Type", "application/json")
+	invokeReq.Header.Set("X-Client", "browser")
+	invokeRR := httptest.NewRecorder()
+	h.ServeHTTP(invokeRR, invokeReq)
+	if invokeRR.Code != http.StatusCreated {
+		t.Fatalf("expected invoke status 201, got %d body=%s", invokeRR.Code, invokeRR.Body.String())
+	}
+	if got := invokeRR.Header().Get("X-Test"); got != "ok" {
+		t.Fatalf("expected X-Test header ok, got %q", got)
+	}
+	if !bytes.Contains(invokeRR.Body.Bytes(), []byte("hello world")) {
+		t.Fatalf("expected invoke body to include hello world, got %s", invokeRR.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rt.payload(), &payload); err != nil {
+		t.Fatalf("decode captured payload failed: %v", err)
+	}
+	if got, _ := payload["method"].(string); got != http.MethodPost {
+		t.Fatalf("expected payload method POST, got %q", got)
+	}
+	if got, _ := payload["path"].(string); got != "/demo/path" {
+		t.Fatalf("expected payload path /demo/path, got %q", got)
+	}
+	if got, _ := payload["raw_query"].(string); got != "mode=test" {
+		t.Fatalf("expected payload raw_query mode=test, got %q", got)
+	}
+	if got, _ := payload["body"].(string); got != `{"name":"trip"}` {
+		t.Fatalf("expected payload body to match request, got %q", got)
+	}
+}
+
+func TestFunctionsHTTPPassthroughInvokeNotFound(t *testing.T) {
+	t.Parallel()
+
+	h, _ := testHandlerWithFunctions(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/fn/missing", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 for missing function, got %d", rr.Code)
+	}
+}
+
+func TestFunctionsHTTPPassthroughCORSPreflight(t *testing.T) {
+	t.Parallel()
+
+	rt := &captureRuntime{output: []byte(`{"continue":true,"output":{"status":200,"body":{"ok":true}}}`)}
+	h, _ := testHandlerWithCustomRuntimeAndOptions(t, rt, Options{
+		FunctionsHTTPPublic:               true,
+		FunctionsHTTPCORSAllowOrigin:      "*",
+		FunctionsHTTPCORSAllowMethods:     "GET,POST,OPTIONS",
+		FunctionsHTTPCORSAllowHeaders:     "Content-Type,X-Request-Id",
+		FunctionsHTTPCORSMaxAge:           1200,
+		FunctionsHTTPCORSAllowCredentials: false,
+	})
+
+	moduleB64 := base64.StdEncoding.EncodeToString([]byte("wasm-module"))
+	body := `{"name":"hello-world-js","runtime":"wazero","trigger":"onHTTPPre","enabled":true,"module_base64":"` + moduleB64 + `"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/functions", bytes.NewBufferString(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/fn/hello-world-js/demo", nil)
+	preflight.Header.Set("Origin", "https://app.example.com")
+	preflight.Header.Set("Access-Control-Request-Method", "POST")
+	preflight.Header.Set("Access-Control-Request-Headers", "Content-Type,X-Request-Id")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, preflight)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight status 204, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected allow-origin '*', got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Methods"); got != "GET,POST,OPTIONS" {
+		t.Fatalf("expected allow-methods header, got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type,X-Request-Id" {
+		t.Fatalf("expected allow-headers header, got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Max-Age"); got != "1200" {
+		t.Fatalf("expected max-age 1200, got %q", got)
+	}
+	if payload := rt.payload(); len(payload) != 0 {
+		t.Fatalf("expected preflight not to invoke function, payload=%s", string(payload))
+	}
+}
+
+func TestFunctionsHTTPPassthroughCORSInvokeHeaders(t *testing.T) {
+	t.Parallel()
+
+	rt := &captureRuntime{output: []byte(`{"continue":true,"output":{"status":200,"body":{"message":"ok"}}}`)}
+	h, _ := testHandlerWithCustomRuntimeAndOptions(t, rt, Options{
+		FunctionsHTTPPublic:               true,
+		FunctionsHTTPCORSAllowOrigin:      "https://app.example.com,https://www.example.com",
+		FunctionsHTTPCORSExposeHeaders:    "X-Trace-Id",
+		FunctionsHTTPCORSAllowCredentials: true,
+	})
+
+	moduleB64 := base64.StdEncoding.EncodeToString([]byte("wasm-module"))
+	body := `{"name":"hello-world-js","runtime":"wazero","trigger":"onHTTPPre","enabled":true,"module_base64":"` + moduleB64 + `"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/functions", bytes.NewBufferString(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	invokeReq := httptest.NewRequest(http.MethodGet, "/fn/hello-world-js", nil)
+	invokeReq.Header.Set("Origin", "https://app.example.com")
+	invokeRR := httptest.NewRecorder()
+	h.ServeHTTP(invokeRR, invokeReq)
+	if invokeRR.Code != http.StatusOK {
+		t.Fatalf("expected invoke status 200, got %d body=%s", invokeRR.Code, invokeRR.Body.String())
+	}
+	if got := invokeRR.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+		t.Fatalf("expected allow-origin to echo origin, got %q", got)
+	}
+	if got := invokeRR.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("expected allow-credentials true, got %q", got)
+	}
+	if got := invokeRR.Header().Get("Access-Control-Expose-Headers"); got != "X-Trace-Id" {
+		t.Fatalf("expected expose-headers X-Trace-Id, got %q", got)
+	}
+}
+
 func testHandlerWithFunctions(t *testing.T, runtimeOutput []byte) (http.Handler, metadata.Store) {
 	t.Helper()
 	return testHandlerWithFunctionsConfig(t, runtimeOutput, functions.Config{
@@ -335,5 +521,54 @@ func testHandlerWithFunctionsConfig(t *testing.T, runtimeOutput []byte, fnCfg fu
 		BucketRegion: "us-east-1",
 		Verifier:     allowAllVerifier{},
 		Functions:    mgr,
+	}), store
+}
+
+func testHandlerWithCustomRuntime(t *testing.T, rt functions.Runtime) (http.Handler, metadata.Store) {
+	t.Helper()
+	return testHandlerWithCustomRuntimeAndOptions(t, rt, Options{})
+}
+
+func testHandlerWithCustomRuntimeAndOptions(t *testing.T, rt functions.Runtime, o Options) (http.Handler, metadata.Store) {
+	t.Helper()
+
+	store, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:test.db"})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	bstore, err := blob.NewStore(blob.Config{RootDir: t.TempDir(), FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+
+	mgr, err := functions.NewManager(functions.Config{
+		Enabled:        true,
+		Dir:            t.TempDir(),
+		Runtime:        functions.RuntimeWazero,
+		MemoryLimitMB:  64,
+		CPULimit:       100 * time.Millisecond,
+		NetworkAllow:   true,
+		FSAllow:        false,
+		ReloadInterval: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new manager failed: %v", err)
+	}
+	mgr.SetRuntimeForTesting(rt)
+
+	return NewHandler(Options{
+		Metadata:                          store,
+		Blob:                              bstore,
+		ReadyCheck:                        func(context.Context) error { return nil },
+		BucketRegion:                      "us-east-1",
+		Verifier:                          allowAllVerifier{},
+		Functions:                         mgr,
+		FunctionsHTTPPublic:               o.FunctionsHTTPPublic,
+		FunctionsHTTPCORSAllowOrigin:      o.FunctionsHTTPCORSAllowOrigin,
+		FunctionsHTTPCORSAllowMethods:     o.FunctionsHTTPCORSAllowMethods,
+		FunctionsHTTPCORSAllowHeaders:     o.FunctionsHTTPCORSAllowHeaders,
+		FunctionsHTTPCORSExposeHeaders:    o.FunctionsHTTPCORSExposeHeaders,
+		FunctionsHTTPCORSMaxAge:           o.FunctionsHTTPCORSMaxAge,
+		FunctionsHTTPCORSAllowCredentials: o.FunctionsHTTPCORSAllowCredentials,
 	}), store
 }

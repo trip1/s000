@@ -71,6 +71,14 @@ Static assets:
 - Session TTL: 12 hours.
 - Global default theme can be configured via `S000_UI_THEME`.
 - Per-session theme override is stored in cookie `s000_ui_theme` from `/app/settings`.
+- Functions gateway/public settings shown in the Functions configuration inspector include:
+  - `S000_FUNCTIONS_HTTP_PUBLIC`
+  - `S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN`
+  - `S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS`
+  - `S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS`
+  - `S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS`
+  - `S000_FUNCTIONS_HTTP_CORS_MAX_AGE`
+  - `S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS`
 
 ## Security Considerations
 

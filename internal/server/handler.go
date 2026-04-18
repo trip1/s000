@@ -21,30 +21,37 @@ type RequestVerifier interface {
 }
 
 type Options struct {
-	Domain               string
-	MaxInFlight          int
-	Verifier             RequestVerifier
-	Metadata             metadata.Store
-	Blob                 *blob.Store
-	Lifecycle            *lifecycle.Worker
-	Metrics              *observability.Collector
-	MetricsPath          string
-	ReadyCheck           func(ctx context.Context) error
-	Tracing              observability.TraceHooks
-	TracingOn            bool
-	HeavyOpsWorkers      int
-	HeavyOpsQueue        int
-	AuditEnabled         bool
-	Audit                AuditSink
-	AuthFailThreshold    int
-	AuthFailWindow       time.Duration
-	AuthBlockDuration    time.Duration
-	AuthFailureProtector authFailureProtector
-	UIAccessKey          string
-	UISecretKey          string
-	UITheme              string
-	BucketRegion         string
-	Functions            *functions.Manager
+	Domain                            string
+	MaxInFlight                       int
+	Verifier                          RequestVerifier
+	Metadata                          metadata.Store
+	Blob                              *blob.Store
+	Lifecycle                         *lifecycle.Worker
+	Metrics                           *observability.Collector
+	MetricsPath                       string
+	ReadyCheck                        func(ctx context.Context) error
+	Tracing                           observability.TraceHooks
+	TracingOn                         bool
+	HeavyOpsWorkers                   int
+	HeavyOpsQueue                     int
+	AuditEnabled                      bool
+	Audit                             AuditSink
+	AuthFailThreshold                 int
+	AuthFailWindow                    time.Duration
+	AuthBlockDuration                 time.Duration
+	AuthFailureProtector              authFailureProtector
+	UIAccessKey                       string
+	UISecretKey                       string
+	UITheme                           string
+	BucketRegion                      string
+	Functions                         *functions.Manager
+	FunctionsHTTPPublic               bool
+	FunctionsHTTPCORSAllowOrigin      string
+	FunctionsHTTPCORSAllowMethods     string
+	FunctionsHTTPCORSAllowHeaders     string
+	FunctionsHTTPCORSExposeHeaders    string
+	FunctionsHTTPCORSMaxAge           int
+	FunctionsHTTPCORSAllowCredentials bool
 }
 
 // NewHandler builds the root HTTP handler and middleware stack.
@@ -91,6 +98,7 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("/functions/logs", functionsLogsHandler(opts))
 	mux.HandleFunc("/functions", functionsCollectionHandler(opts))
 	mux.HandleFunc("/functions/", functionsItemHandler(opts))
+	mux.HandleFunc("/fn/", functionsHTTPInvokeHandler(opts))
 	mux.HandleFunc("/", s3Handler(opts))
 
 	return withMiddleware(mux, opts)

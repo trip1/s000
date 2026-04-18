@@ -88,4 +88,4 @@ watch:
 		echo "  go install github.com/air-verse/air@latest"; \
 		exit 1; \
 	}
-	air -c .air.toml
+	env -u GOROOT -u GOTOOLDIR GOOS=linux GOARCH=amd64 air -c .air.toml

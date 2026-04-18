@@ -46,6 +46,30 @@ func TestAuthFailureProtectorBlocksRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestAuthGateFunctionsHTTPPublicBypass(t *testing.T) {
+	t.Parallel()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/fn/hello", nil)
+
+	blocked := withAuthGate(next, Options{Verifier: denyMissingAuthVerifier{}})
+	blockedRR := httptest.NewRecorder()
+	blocked.ServeHTTP(blockedRR, req)
+	if blockedRR.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden when public gateway disabled, got %d", blockedRR.Code)
+	}
+
+	public := withAuthGate(next, Options{Verifier: denyMissingAuthVerifier{}, FunctionsHTTPPublic: true})
+	publicRR := httptest.NewRecorder()
+	public.ServeHTTP(publicRR, req)
+	if publicRR.Code != http.StatusNoContent {
+		t.Fatalf("expected auth bypass for public gateway, got %d", publicRR.Code)
+	}
+}
+
 func TestAuditEventsForDestructiveOperations(t *testing.T) {
 	t.Parallel()
 

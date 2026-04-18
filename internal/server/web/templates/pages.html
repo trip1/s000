@@ -252,7 +252,7 @@
   </article>
   <article>
     <h2>Create Function</h2>
-    <form method="post" action="/app/actions/functions/create" aria-label="Create function" hx-post="/app/actions/functions/create" hx-target="#functions-flash" hx-swap="innerHTML">
+    <form method="post" action="/app/actions/functions/create" enctype="multipart/form-data" aria-label="Create function" hx-post="/app/actions/functions/create" hx-encoding="multipart/form-data" hx-target="#functions-flash" hx-swap="innerHTML">
       <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
       <label for="fn-name">Name</label>
       <input id="fn-name" type="text" name="name" required>
@@ -272,8 +272,10 @@
       <label for="fn-priority">Priority</label>
       <input id="fn-priority" type="number" name="priority" value="100" min="1">
       <label><input type="checkbox" name="enabled" checked> Enabled</label>
-      <label for="fn-module">Module base64</label>
-      <textarea id="fn-module" name="module_base64" rows="4" placeholder="base64 wasm bytes" required></textarea>
+      <label for="fn-module-file">WASM module file (.wasm)</label>
+      <input id="fn-module-file" type="file" name="module_file" accept=".wasm,application/wasm" required>
+      <label for="fn-module">Module base64 (optional fallback)</label>
+      <textarea id="fn-module" name="module_base64" rows="4" placeholder="optional: base64 wasm bytes"></textarea>
       <button type="submit">Create function</button>
     </form>
   </article>
@@ -281,12 +283,20 @@
     <h2>Configuration Inspector</h2>
     <dl>
       <dt>Runtime</dt><dd>{{.FunctionsConfig.Runtime}}</dd>
+      <dt>HTTP gateway</dt><dd><code>/fn/{name}</code></dd>
+      <dt>HTTP gateway public</dt><dd>{{.FunctionsHTTPPublic}}</dd>
       <dt>Rate limit / minute</dt><dd>{{.FunctionsConfig.RateLimitPerMinute}}</dd>
       <dt>Max concurrent</dt><dd>{{.FunctionsConfig.MaxConcurrent}}</dd>
       <dt>Daily quota</dt><dd>{{.FunctionsConfig.DailyInvocationQuota}}</dd>
       <dt>Alert threshold</dt><dd>{{.FunctionsConfig.AlertErrorCountThreshold}}</dd>
       <dt>Hot reload</dt><dd>{{.FunctionsConfig.HotReload}}</dd>
       <dt>Reload interval</dt><dd>{{.FunctionsConfig.ReloadInterval}}</dd>
+      <dt>CORS allow origin</dt><dd>{{if .FunctionsHTTPCORSAllowOrigin}}{{.FunctionsHTTPCORSAllowOrigin}}{{else}}disabled{{end}}</dd>
+      <dt>CORS allow methods</dt><dd>{{.FunctionsHTTPCORSAllowMethods}}</dd>
+      <dt>CORS allow headers</dt><dd>{{.FunctionsHTTPCORSAllowHeaders}}</dd>
+      <dt>CORS expose headers</dt><dd>{{if .FunctionsHTTPCORSExposeHeaders}}{{.FunctionsHTTPCORSExposeHeaders}}{{else}}none{{end}}</dd>
+      <dt>CORS max age</dt><dd>{{.FunctionsHTTPCORSMaxAge}}</dd>
+      <dt>CORS allow credentials</dt><dd>{{.FunctionsHTTPCORSAllowCredentials}}</dd>
     </dl>
   </article>
   <article>
@@ -329,7 +339,7 @@
   </article>
   <article>
     <h2>Update</h2>
-    <form method="post" action="/app/actions/functions/update" aria-label="Update function" hx-post="/app/actions/functions/update" hx-target="#function-detail-flash" hx-swap="innerHTML">
+    <form method="post" action="/app/actions/functions/update" enctype="multipart/form-data" aria-label="Update function" hx-post="/app/actions/functions/update" hx-encoding="multipart/form-data" hx-target="#function-detail-flash" hx-swap="innerHTML">
       <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
       <input type="hidden" name="name" value="{{.FunctionName}}">
       <label for="fn-detail-runtime">Runtime</label>
@@ -348,7 +358,9 @@
       <label for="fn-detail-priority">Priority</label>
       <input id="fn-detail-priority" type="number" name="priority" value="{{if .Function}}{{.Function.Priority}}{{else}}100{{end}}" min="1">
       <label><input type="checkbox" name="enabled" {{if and .Function .Function.Enabled}}checked{{end}}> Enabled</label>
-      <label for="fn-detail-module">Module base64 (optional for new version)</label>
+      <label for="fn-detail-module-file">WASM module file (.wasm, optional for new version)</label>
+      <input id="fn-detail-module-file" type="file" name="module_file" accept=".wasm,application/wasm">
+      <label for="fn-detail-module">Module base64 (optional fallback for new version)</label>
       <textarea id="fn-detail-module" name="module_base64" rows="4" placeholder="leave blank to keep current module"></textarea>
       <button type="submit">Update function</button>
     </form>

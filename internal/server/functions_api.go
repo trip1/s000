@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +29,12 @@ type activateVersionRequest struct {
 
 type invokeRequest struct {
 	Payload json.RawMessage `json:"payload"`
+}
+
+type functionHTTPResponse struct {
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers"`
+	Body    any               `json:"body"`
 }
 
 func functionsTemplatesHandler(opts Options) http.HandlerFunc {
@@ -135,6 +143,219 @@ func functionsCollectionHandler(opts Options) http.HandlerFunc {
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+func functionsHTTPInvokeHandler(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if handled := applyFunctionsHTTPCORS(w, r, opts); handled {
+			return
+		}
+
+		mgr := opts.Functions
+		if mgr == nil || !mgr.Enabled() {
+			http.Error(w, `{"error":"functions runtime is disabled"}`, http.StatusServiceUnavailable)
+			return
+		}
+
+		suffix := strings.TrimPrefix(r.URL.Path, "/fn/")
+		suffix = strings.Trim(strings.TrimSpace(suffix), "/")
+		parts := strings.Split(suffix, "/")
+		name := strings.TrimSpace(parts[0])
+		if name == "" {
+			http.Error(w, `{"error":"function name is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		if _, err := mgr.GetFunction(name); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		path := "/"
+		if len(parts) > 1 {
+			path = "/" + strings.Join(parts[1:], "/")
+		}
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
+			return
+		}
+
+		headers := make(map[string]string, len(r.Header))
+		for k, values := range r.Header {
+			headers[k] = strings.Join(values, ",")
+		}
+
+		event := map[string]any{
+			"type":      functions.EventTypeHTTP,
+			"phase":     "invoke",
+			"method":    r.Method,
+			"path":      path,
+			"raw_path":  r.URL.Path,
+			"query":     r.URL.Query(),
+			"raw_query": r.URL.RawQuery,
+			"headers":   headers,
+			"body":      string(bodyBytes),
+		}
+
+		if len(bodyBytes) > 0 && strings.Contains(strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type"))), "application/json") {
+			var bodyJSON any
+			if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
+				event["body_json"] = bodyJSON
+			}
+		}
+
+		payload, err := json.Marshal(event)
+		if err != nil {
+			http.Error(w, `{"error":"failed to encode invoke payload"}`, http.StatusInternalServerError)
+			return
+		}
+
+		result, err := mgr.InvokeFunction(r.Context(), name, payload)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if !result.Continue {
+			http.Error(w, `{"error":"request blocked by function"}`, http.StatusForbidden)
+			return
+		}
+
+		writeFunctionHTTPResult(w, result)
+	}
+}
+
+func applyFunctionsHTTPCORS(w http.ResponseWriter, r *http.Request, opts Options) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+
+	allowedOrigin, ok := resolveFunctionsCORSOrigin(origin, opts)
+	if r.Method == http.MethodOptions && strings.TrimSpace(r.Header.Get("Access-Control-Request-Method")) != "" {
+		w.Header().Add("Vary", "Origin")
+		w.Header().Add("Vary", "Access-Control-Request-Method")
+		w.Header().Add("Vary", "Access-Control-Request-Headers")
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+		setFunctionsCORSHeaders(w, allowedOrigin, opts)
+		methods := strings.TrimSpace(opts.FunctionsHTTPCORSAllowMethods)
+		if methods == "" {
+			methods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		}
+		headers := strings.TrimSpace(opts.FunctionsHTTPCORSAllowHeaders)
+		if headers == "" {
+			headers = strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+			if headers == "" {
+				headers = "Content-Type, Authorization"
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Methods", methods)
+		w.Header().Set("Access-Control-Allow-Headers", headers)
+		if opts.FunctionsHTTPCORSMaxAge > 0 {
+			w.Header().Set("Access-Control-Max-Age", strconv.Itoa(opts.FunctionsHTTPCORSMaxAge))
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+
+	if !ok {
+		return false
+	}
+	w.Header().Add("Vary", "Origin")
+	setFunctionsCORSHeaders(w, allowedOrigin, opts)
+	return false
+}
+
+func setFunctionsCORSHeaders(w http.ResponseWriter, allowedOrigin string, opts Options) {
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+	if opts.FunctionsHTTPCORSAllowCredentials {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+	if exposed := strings.TrimSpace(opts.FunctionsHTTPCORSExposeHeaders); exposed != "" {
+		w.Header().Set("Access-Control-Expose-Headers", exposed)
+	}
+}
+
+func resolveFunctionsCORSOrigin(origin string, opts Options) (string, bool) {
+	allowed := strings.TrimSpace(opts.FunctionsHTTPCORSAllowOrigin)
+	if allowed == "" {
+		return "", false
+	}
+	if allowed == "*" {
+		if opts.FunctionsHTTPCORSAllowCredentials {
+			return origin, true
+		}
+		return "*", true
+	}
+	for _, candidate := range strings.Split(allowed, ",") {
+		if strings.EqualFold(strings.TrimSpace(candidate), origin) {
+			return origin, true
+		}
+	}
+	return "", false
+}
+
+func writeFunctionHTTPResult(w http.ResponseWriter, result functions.InvocationResult) {
+	if len(result.Output) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var fnResp functionHTTPResponse
+	if err := json.Unmarshal(result.Output, &fnResp); err == nil {
+		if fnResp.Status <= 0 {
+			fnResp.Status = http.StatusOK
+		}
+		for k, v := range fnResp.Headers {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			w.Header().Set(k, v)
+		}
+		writeFunctionHTTPBody(w, fnResp.Status, fnResp.Body)
+		return
+	}
+
+	if !json.Valid(result.Output) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.TrimSpace(result.Output))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Output)
+}
+
+func writeFunctionHTTPBody(w http.ResponseWriter, status int, body any) {
+	if body == nil {
+		w.WriteHeader(status)
+		return
+	}
+	switch v := body.(type) {
+	case string:
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(v))
+	default:
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		enc, err := json.Marshal(v)
+		if err != nil {
+			http.Error(w, `{"error":"failed to encode function response body"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write(enc)
 	}
 }
 

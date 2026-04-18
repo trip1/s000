@@ -347,6 +347,9 @@ func TestWebUIFunctionsPagesPartialsAndActions(t *testing.T) {
 	if !strings.Contains(pageBody, "Configuration Inspector") || !strings.Contains(pageBody, "aria-live=\"polite\"") {
 		t.Fatalf("expected configuration inspector and aria-live markers in functions page, got %q", pageBody)
 	}
+	if !strings.Contains(pageBody, "HTTP gateway public") || !strings.Contains(pageBody, "https://app.example.com") || !strings.Contains(pageBody, "CORS allow credentials") {
+		t.Fatalf("expected function HTTP gateway and CORS config in inspector, got %q", pageBody)
+	}
 
 	createForm := url.Values{
 		"_csrf":         {csrf},
@@ -439,6 +442,67 @@ func TestWebUIFunctionsPagesPartialsAndActions(t *testing.T) {
 	h.ServeHTTP(deleteRR, deleteReq)
 	if deleteRR.Code != http.StatusSeeOther {
 		t.Fatalf("expected delete redirect, got %d", deleteRR.Code)
+	}
+}
+
+func TestWebUIFunctionsWasmFileUploadCreateAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	h := newAuthedWebUIHandlerWithFunctions(t)
+	cookie := loginAndGetSessionCookie(t, h)
+	csrf := extractCSRFToken(t, h, cookie, "/app/functions")
+
+	createBody, createType := multipartUploadBody(t, map[string]string{
+		"_csrf":    csrf,
+		"name":     "ui-fn-file",
+		"runtime":  "wazero",
+		"trigger":  "onHTTPPre",
+		"priority": "100",
+		"enabled":  "on",
+	}, "module_file", "fn.wasm", "module-v1")
+	createReq := httptest.NewRequest(http.MethodPost, "/app/actions/functions/create", createBody)
+	createReq.Header.Set("Content-Type", createType)
+	createReq.AddCookie(cookie)
+	createRR := httptest.NewRecorder()
+	h.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected create redirect for wasm upload, got %d body=%q", createRR.Code, createRR.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/app/partials/functions", nil)
+	listReq.AddCookie(cookie)
+	listRR := httptest.NewRecorder()
+	h.ServeHTTP(listRR, listReq)
+	if listRR.Code != http.StatusOK || !strings.Contains(listRR.Body.String(), "ui-fn-file") {
+		t.Fatalf("expected functions partial to include uploaded function, status=%d body=%q", listRR.Code, listRR.Body.String())
+	}
+
+	updateBody, updateType := multipartUploadBody(t, map[string]string{
+		"_csrf":    csrf,
+		"name":     "ui-fn-file",
+		"runtime":  "wazero",
+		"trigger":  "onHTTPPost",
+		"priority": "120",
+		"enabled":  "on",
+	}, "module_file", "fn-v2.wasm", "module-v2")
+	updateReq := httptest.NewRequest(http.MethodPost, "/app/actions/functions/update", updateBody)
+	updateReq.Header.Set("Content-Type", updateType)
+	updateReq.AddCookie(cookie)
+	updateRR := httptest.NewRecorder()
+	h.ServeHTTP(updateRR, updateReq)
+	if updateRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected update redirect for wasm upload, got %d body=%q", updateRR.Code, updateRR.Body.String())
+	}
+
+	versionsReq := httptest.NewRequest(http.MethodGet, "/app/partials/function-versions?name=ui-fn-file", nil)
+	versionsReq.AddCookie(cookie)
+	versionsRR := httptest.NewRecorder()
+	h.ServeHTTP(versionsRR, versionsReq)
+	if versionsRR.Code != http.StatusOK {
+		t.Fatalf("expected versions partial status 200, got %d", versionsRR.Code)
+	}
+	if !strings.Contains(versionsRR.Body.String(), "value=\"2\"") {
+		t.Fatalf("expected version 2 entry after wasm file update, got %q", versionsRR.Body.String())
 	}
 }
 
@@ -610,7 +674,21 @@ func newAuthedWebUIHandlerWithFunctions(t *testing.T) http.Handler {
 	}
 	mgr.SetRuntimeForTesting(fakeRuntime{output: []byte(`{"continue":true,"output":{"ok":true}}`)})
 
-	return NewHandler(Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret", UITheme: "sysadmin90", Functions: mgr})
+	return NewHandler(Options{
+		Metadata:                          mstore,
+		Blob:                              bstore,
+		UIAccessKey:                       "admin",
+		UISecretKey:                       "secret",
+		UITheme:                           "sysadmin90",
+		Functions:                         mgr,
+		FunctionsHTTPPublic:               true,
+		FunctionsHTTPCORSAllowOrigin:      "https://app.example.com",
+		FunctionsHTTPCORSAllowMethods:     "GET,POST,OPTIONS",
+		FunctionsHTTPCORSAllowHeaders:     "Content-Type,Authorization",
+		FunctionsHTTPCORSExposeHeaders:    "X-Trace-Id",
+		FunctionsHTTPCORSMaxAge:           1200,
+		FunctionsHTTPCORSAllowCredentials: true,
+	})
 }
 
 func newAuthedWebUIHandlerWithTheme(t *testing.T, theme string) http.Handler {

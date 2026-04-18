@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -46,6 +47,14 @@ type webUI struct {
 	secretKey string
 	uiTheme   string
 
+	functionsHTTPPublic               bool
+	functionsHTTPCORSAllowOrigin      string
+	functionsHTTPCORSAllowMethods     string
+	functionsHTTPCORSAllowHeaders     string
+	functionsHTTPCORSExposeHeaders    string
+	functionsHTTPCORSMaxAge           int
+	functionsHTTPCORSAllowCredentials bool
+
 	mu       sync.Mutex
 	sessions map[string]uiSession
 }
@@ -62,43 +71,50 @@ type webRoute struct {
 }
 
 type webPageData struct {
-	Title                 string
-	Page                  string
-	RouteMap              []webRoute
-	Buckets               []metadata.Bucket
-	Bucket                *metadata.Bucket
-	BucketName            string
-	BucketWebsite         metadata.BucketWebsiteConfig
-	BucketCORS            metadata.BucketCORSConfig
-	BucketPolicy          metadata.BucketPolicy
-	BucketPublicAccess    metadata.BucketPublicAccessBlock
-	ObjectKey             string
-	Object                *metadata.ObjectVersion
-	Objects               []metadata.ObjectVersion
-	Prefix                string
-	Delimiter             string
-	MaxKeys               int
-	ContinuationToken     string
-	NextContinuationToken string
-	IsTruncated           bool
-	CommonPrefixes        []string
-	GeneratedAt           string
-	Error                 string
-	Flash                 string
-	CSRFToken             string
-	Theme                 string
-	ThemeOptions          []string
-	Functions             []functions.FunctionSummary
-	Function              *functions.Function
-	FunctionName          string
-	FunctionVersions      []functions.FunctionVersionSummary
-	FunctionMetrics       []functions.FunctionMetric
-	FunctionAlerts        []functions.FunctionAlert
-	FunctionLogs          []functions.FunctionLogEntry
-	FunctionTemplates     []functions.Template
-	InvokePayload         string
-	InvokeResult          string
-	FunctionsConfig       functions.Config
+	Title                             string
+	Page                              string
+	RouteMap                          []webRoute
+	Buckets                           []metadata.Bucket
+	Bucket                            *metadata.Bucket
+	BucketName                        string
+	BucketWebsite                     metadata.BucketWebsiteConfig
+	BucketCORS                        metadata.BucketCORSConfig
+	BucketPolicy                      metadata.BucketPolicy
+	BucketPublicAccess                metadata.BucketPublicAccessBlock
+	ObjectKey                         string
+	Object                            *metadata.ObjectVersion
+	Objects                           []metadata.ObjectVersion
+	Prefix                            string
+	Delimiter                         string
+	MaxKeys                           int
+	ContinuationToken                 string
+	NextContinuationToken             string
+	IsTruncated                       bool
+	CommonPrefixes                    []string
+	GeneratedAt                       string
+	Error                             string
+	Flash                             string
+	CSRFToken                         string
+	Theme                             string
+	ThemeOptions                      []string
+	Functions                         []functions.FunctionSummary
+	Function                          *functions.Function
+	FunctionName                      string
+	FunctionVersions                  []functions.FunctionVersionSummary
+	FunctionMetrics                   []functions.FunctionMetric
+	FunctionAlerts                    []functions.FunctionAlert
+	FunctionLogs                      []functions.FunctionLogEntry
+	FunctionTemplates                 []functions.Template
+	InvokePayload                     string
+	InvokeResult                      string
+	FunctionsConfig                   functions.Config
+	FunctionsHTTPPublic               bool
+	FunctionsHTTPCORSAllowOrigin      string
+	FunctionsHTTPCORSAllowMethods     string
+	FunctionsHTTPCORSAllowHeaders     string
+	FunctionsHTTPCORSExposeHeaders    string
+	FunctionsHTTPCORSMaxAge           int
+	FunctionsHTTPCORSAllowCredentials bool
 }
 
 var supportedThemes = map[string]struct{}{
@@ -125,15 +141,22 @@ func newWebUI(opts Options) (*webUI, error) {
 	}
 
 	return &webUI{
-		templates: tpls,
-		staticFS:  assets,
-		store:     opts.Metadata,
-		blob:      opts.Blob,
-		functions: opts.Functions,
-		accessKey: opts.UIAccessKey,
-		secretKey: opts.UISecretKey,
-		uiTheme:   normalizeTheme(opts.UITheme),
-		sessions:  map[string]uiSession{},
+		templates:                         tpls,
+		staticFS:                          assets,
+		store:                             opts.Metadata,
+		blob:                              opts.Blob,
+		functions:                         opts.Functions,
+		accessKey:                         opts.UIAccessKey,
+		secretKey:                         opts.UISecretKey,
+		uiTheme:                           normalizeTheme(opts.UITheme),
+		functionsHTTPPublic:               opts.FunctionsHTTPPublic,
+		functionsHTTPCORSAllowOrigin:      opts.FunctionsHTTPCORSAllowOrigin,
+		functionsHTTPCORSAllowMethods:     opts.FunctionsHTTPCORSAllowMethods,
+		functionsHTTPCORSAllowHeaders:     opts.FunctionsHTTPCORSAllowHeaders,
+		functionsHTTPCORSExposeHeaders:    opts.FunctionsHTTPCORSExposeHeaders,
+		functionsHTTPCORSMaxAge:           opts.FunctionsHTTPCORSMaxAge,
+		functionsHTTPCORSAllowCredentials: opts.FunctionsHTTPCORSAllowCredentials,
+		sessions:                          map[string]uiSession{},
 		routeMap: []webRoute{
 			{Path: "/app/login", Purpose: "operator sign-in shell"},
 			{Path: "/app", Purpose: "dashboard and quick actions"},
@@ -586,18 +609,14 @@ func webUIHandler(opts Options) http.Handler {
 			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
 			return
 		}
-		if err := r.ParseForm(); err != nil {
+		if err := parseFunctionActionForm(r); err != nil {
 			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
 			return
 		}
 		priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
-		module, err := base64.StdEncoding.DecodeString(strings.TrimSpace(r.FormValue("module_base64")))
+		module, err := parseFunctionModule(r, true)
 		if err != nil {
-			ui.respondActionResult(w, r, false, "invalid module base64", "/app/functions", "")
-			return
-		}
-		if len(module) == 0 {
-			ui.respondActionResult(w, r, false, "module payload is required", "/app/functions", "")
+			ui.respondActionResult(w, r, false, err.Error(), "/app/functions", "")
 			return
 		}
 		err = ui.functions.CreateFunction(functions.Function{
@@ -632,22 +651,18 @@ func webUIHandler(opts Options) http.Handler {
 			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
 			return
 		}
-		if err := r.ParseForm(); err != nil {
+		if err := parseFunctionActionForm(r); err != nil {
 			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
 			return
 		}
 		name := strings.TrimSpace(r.FormValue("name"))
 		priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
-		var module []byte
-		if raw := strings.TrimSpace(r.FormValue("module_base64")); raw != "" {
-			decoded, err := base64.StdEncoding.DecodeString(raw)
-			if err != nil {
-				ui.respondActionResult(w, r, false, "invalid module base64", "/app/functions/"+url.PathEscape(name), "")
-				return
-			}
-			module = decoded
+		module, err := parseFunctionModule(r, false)
+		if err != nil {
+			ui.respondActionResult(w, r, false, err.Error(), "/app/functions/"+url.PathEscape(name), "")
+			return
 		}
-		err := ui.functions.UpdateFunction(name, functions.Function{
+		err = ui.functions.UpdateFunction(name, functions.Function{
 			Runtime:  strings.TrimSpace(r.FormValue("runtime")),
 			Trigger:  strings.TrimSpace(r.FormValue("trigger")),
 			Priority: priority,
@@ -883,6 +898,13 @@ func webUIHandler(opts Options) http.Handler {
 		data.FunctionMetrics = ui.functions.Metrics()
 		data.FunctionAlerts = ui.functions.Alerts()
 		data.FunctionsConfig = ui.functions.ConfigSnapshot()
+		data.FunctionsHTTPPublic = ui.functionsHTTPPublic
+		data.FunctionsHTTPCORSAllowOrigin = ui.functionsHTTPCORSAllowOrigin
+		data.FunctionsHTTPCORSAllowMethods = ui.functionsHTTPCORSAllowMethods
+		data.FunctionsHTTPCORSAllowHeaders = ui.functionsHTTPCORSAllowHeaders
+		data.FunctionsHTTPCORSExposeHeaders = ui.functionsHTTPCORSExposeHeaders
+		data.FunctionsHTTPCORSMaxAge = ui.functionsHTTPCORSMaxAge
+		data.FunctionsHTTPCORSAllowCredentials = ui.functionsHTTPCORSAllowCredentials
 		ui.renderPage(w, r, "functions", data)
 	})
 	mux.HandleFunc("/app/functions/", func(w http.ResponseWriter, r *http.Request) {
@@ -1355,6 +1377,53 @@ func (u *webUI) listObjectsData(r *http.Request, bucket string) (webPageData, er
 	}
 	sort.Strings(data.CommonPrefixes)
 	return data, nil
+}
+
+func parseFunctionActionForm(r *http.Request) error {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		return r.ParseMultipartForm(32 << 20)
+	}
+	return r.ParseForm()
+}
+
+func parseFunctionModule(r *http.Request, required bool) ([]byte, error) {
+	if file, header, err := r.FormFile("module_file"); err == nil {
+		defer func() { _ = file.Close() }()
+		if header == nil || strings.TrimSpace(header.Filename) == "" {
+			return nil, fmt.Errorf("invalid module file")
+		}
+		if ext := strings.ToLower(filepath.Ext(strings.TrimSpace(header.Filename))); ext != ".wasm" {
+			return nil, fmt.Errorf("module file must be .wasm")
+		}
+		module, err := io.ReadAll(io.LimitReader(file, 32<<20+1))
+		if err != nil {
+			return nil, fmt.Errorf("module file read failed")
+		}
+		if len(module) > 32<<20 {
+			return nil, fmt.Errorf("module file exceeds 32MB limit")
+		}
+		if len(module) == 0 {
+			return nil, fmt.Errorf("module file is empty")
+		}
+		return module, nil
+	}
+
+	if raw := strings.TrimSpace(r.FormValue("module_base64")); raw != "" {
+		module, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid module base64")
+		}
+		if len(module) == 0 {
+			return nil, fmt.Errorf("module payload is required")
+		}
+		return module, nil
+	}
+
+	if required {
+		return nil, fmt.Errorf("module file or module base64 is required")
+	}
+	return nil, nil
 }
 
 func (u *webUI) renderPartial(w http.ResponseWriter, r *http.Request, name string, data webPageData) {
