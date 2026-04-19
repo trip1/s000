@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ds9labs.com/s000/internal/auth"
 	"ds9labs.com/s000/internal/blob"
 	"ds9labs.com/s000/internal/lifecycle"
 	"ds9labs.com/s000/internal/metadata"
@@ -20,29 +21,36 @@ type RequestVerifier interface {
 }
 
 type Options struct {
-	Domain                            string
-	MaxInFlight                       int
-	Verifier                          RequestVerifier
-	Metadata                          metadata.Store
-	Blob                              *blob.Store
-	Lifecycle                         *lifecycle.Worker
-	Metrics                           *observability.Collector
-	MetricsPath                       string
-	ReadyCheck                        func(ctx context.Context) error
-	Tracing                           observability.TraceHooks
-	TracingOn                         bool
-	HeavyOpsWorkers                   int
-	HeavyOpsQueue                     int
-	AuditEnabled                      bool
-	Audit                             AuditSink
-	AuthFailThreshold                 int
-	AuthFailWindow                    time.Duration
-	AuthBlockDuration                 time.Duration
-	AuthFailureProtector              authFailureProtector
-	UIAccessKey                       string
-	UISecretKey                       string
-	UITheme                           string
-	BucketRegion                      string
+	Domain               string
+	MaxInFlight          int
+	Verifier             RequestVerifier
+	Metadata             metadata.Store
+	Blob                 *blob.Store
+	Lifecycle            *lifecycle.Worker
+	Metrics              *observability.Collector
+	MetricsPath          string
+	ReadyCheck           func(ctx context.Context) error
+	Tracing              observability.TraceHooks
+	TracingOn            bool
+	HeavyOpsWorkers      int
+	HeavyOpsQueue        int
+	AuditEnabled         bool
+	Audit                AuditSink
+	AuthFailThreshold    int
+	AuthFailWindow       time.Duration
+	AuthBlockDuration    time.Duration
+	PATSigningKey        string
+	PATManager           *auth.PersonalAccessTokenManager
+	AuthFailureProtector authFailureProtector
+	UIAccessKey          string
+	UISecretKey          string
+	UITheme              string
+	UIDashboardStatsSSE  time.Duration
+	UIBucketsSSE         time.Duration
+	UITokensSSE          time.Duration
+	UIObjectsSSE         time.Duration
+	UIObjectMetadataSSE  time.Duration
+	BucketRegion         string
 }
 
 // NewHandler builds the root HTTP handler and middleware stack.

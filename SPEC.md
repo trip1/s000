@@ -38,6 +38,7 @@ Primary outcomes:
 - Range reads.
 - ETag and checksum headers.
 - User metadata (`x-amz-meta-*`).
+- Virtual folder semantics via key prefixes (`/`) with `ListObjectsV2` support for `prefix`, `delimiter`, `CommonPrefixes`, and `KeyCount`.
 
 ### Multipart Upload
 - CreateMultipartUpload.
@@ -142,6 +143,13 @@ Primary outcomes:
 - Implement strict behavior for common paths first.
 - Return S3-compatible error codes/messages for client interoperability.
 - Maintain an API compatibility matrix and integration tests against `aws-cli` scenarios.
+
+### Folder Compatibility Contract
+- Folders are virtual, derived from object key prefixes; no first-class folder metadata entity.
+- Folder marker objects (keys ending with `/`) are supported as normal objects.
+- `ListObjectsV2` with `delimiter=/` must return direct child objects in `Contents` and direct child prefixes in `CommonPrefixes`.
+- `KeyCount` must reflect returned `Contents + CommonPrefixes` entries for each page.
+- Continuation tokens are opaque and tied to listing parameters (`prefix`, `delimiter`).
 
 ## 11) Testing and Quality Gates
 - Unit tests for signing, metadata transactions, lifecycle logic.

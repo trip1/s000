@@ -7,6 +7,8 @@
 - `backup-create` - create a cold backup snapshot.
 - `restore-validate` - validate backup restore layout.
 - `health-inspect` - probe `/healthz` and `/readyz`.
+- `token-create` - mint personal access token for bearer auth.
+- `put-object` - upload one object with bearer token auth.
 - `completion` - print shell completion snippet.
 - `help` - show command usage.
 
@@ -33,6 +35,12 @@ s000ctl restore-validate --path ./backup
 # Check service health
 s000ctl health-inspect --endpoint http://127.0.0.1:9000
 
+# Create token (defaults to S000_PAT_SIGNING_KEY if set)
+TOKEN=$(s000ctl token-create --subject ci --ttl 24h)
+
+# Upload object with token
+s000ctl put-object --endpoint http://127.0.0.1:9000 --bucket my-bucket --key notes.txt --file ./notes.txt --token "$TOKEN"
+
 # Generate shell completion snippet
 s000ctl completion --shell bash
 ```
@@ -45,5 +53,9 @@ s000ctl completion --shell bash
   - Backup is incomplete; re-run `backup-create` and verify destination permissions.
 - `healthz failed` or `readyz failed`
   - Check endpoint URL/port, service startup status, and TLS/non-TLS scheme.
+- `token-create failed: pat signing key is required`
+  - Set `S000_PAT_SIGNING_KEY` (or pass `--signing-key`) and retry.
+- `put-object failed: bucket, key, file, and token are required`
+  - Provide all four flags; `--token` can be replaced by `S000_ACCESS_TOKEN` env var.
 - `completion failed: unsupported shell`
   - Use one of: `bash`, `zsh`, `fish`, `powershell`.

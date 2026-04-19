@@ -71,15 +71,15 @@ func NewStore(cfg Config) (Store, error) {
 
 	switch cfg.Backend {
 	case BackendSQLite:
-		return newMemoryBackedStore(cfg, "sqlite"), nil
+		return newMemoryBackedStore(cfg, "sqlite")
 	case BackendLibSQL:
-		return newMemoryBackedStore(cfg, "libsql"), nil
+		return newMemoryBackedStore(cfg, "libsql")
 	case BackendPostgreSQL:
-		return newMemoryBackedStore(cfg, "postgresql"), nil
+		return newMemoryBackedStore(cfg, "postgresql")
 	case BackendMariaDB:
-		return newMemoryBackedStore(cfg, "mariadb"), nil
+		return newMemoryBackedStore(cfg, "mariadb")
 	case BackendValkey:
-		return newMemoryBackedStore(cfg, "valkey"), nil
+		return newMemoryBackedStore(cfg, "valkey")
 	default:
 		return nil, fmt.Errorf("unsupported metadata backend %q", cfg.Backend)
 	}
@@ -104,26 +104,61 @@ type memoryState struct {
 }
 
 type memoryBackedStore struct {
-	mu  sync.RWMutex
-	now func() time.Time
-	st  memoryState
+	mu        sync.RWMutex
+	now       func() time.Time
+	persister statePersister
+	st        memoryState
 }
 
-func newMemoryBackedStore(cfg Config, backendLabel string) *memoryBackedStore {
-	return &memoryBackedStore{
-		now: cfg.NowProvider,
-		st: memoryState{
-			buckets:      make(map[string]Bucket),
-			objects:      make(map[objectKey][]ObjectVersion),
-			multipart:    make(map[string]MultipartUpload),
-			parts:        make(map[string]map[int]MultipartPart),
-			credentials:  make(map[string]CredentialRecord),
-			websites:     make(map[string]BucketWebsiteConfig),
-			cors:         make(map[string]BucketCORSConfig),
-			policies:     make(map[string]BucketPolicy),
-			publicAccess: make(map[string]BucketPublicAccessBlock),
-			backendLabel: backendLabel,
-		},
+type persistedObject struct {
+	Bucket   string          `json:"bucket"`
+	Key      string          `json:"key"`
+	Versions []ObjectVersion `json:"versions"`
+}
+
+type persistedState struct {
+	Buckets      map[string]Bucket                     `json:"buckets"`
+	Objects      []persistedObject                     `json:"objects"`
+	Multipart    map[string]MultipartUpload            `json:"multipart"`
+	Parts        map[string]map[int]MultipartPart      `json:"parts"`
+	Credentials  map[string]CredentialRecord           `json:"credentials"`
+	Websites     map[string]BucketWebsiteConfig        `json:"websites"`
+	CORS         map[string]BucketCORSConfig           `json:"cors"`
+	Policies     map[string]BucketPolicy               `json:"policies"`
+	PublicAccess map[string]BucketPublicAccessBlock    `json:"public_access"`
+	BackendLabel string                                `json:"backend_label"`
+}
+
+func newMemoryBackedStore(cfg Config, backendLabel string) (*memoryBackedStore, error) {
+	store := &memoryBackedStore{
+		now:       cfg.NowProvider,
+		persister: newStatePersister(cfg),
+		st:        emptyState(backendLabel),
+	}
+	if store.persister != nil {
+		state, ok, err := store.persister.Load(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("load persisted metadata state: %w", err)
+		}
+		if ok {
+			store.applyPersistedState(state)
+		}
+	}
+	return store, nil
+}
+
+func emptyState(backendLabel string) memoryState {
+	return memoryState{
+		buckets:      make(map[string]Bucket),
+		objects:      make(map[objectKey][]ObjectVersion),
+		multipart:    make(map[string]MultipartUpload),
+		parts:        make(map[string]map[int]MultipartPart),
+		credentials:  make(map[string]CredentialRecord),
+		websites:     make(map[string]BucketWebsiteConfig),
+		cors:         make(map[string]BucketCORSConfig),
+		policies:     make(map[string]BucketPolicy),
+		publicAccess: make(map[string]BucketPublicAccessBlock),
+		backendLabel: backendLabel,
 	}
 }
 
@@ -131,7 +166,10 @@ func newMemoryBackedStore(cfg Config, backendLabel string) *memoryBackedStore {
 func (s *memoryBackedStore) CreateBucket(_ context.Context, bucket Bucket) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return createBucket(&s.st, bucket)
+	if err := createBucket(&s.st, bucket); err != nil {
+		return err
+	}
+	return s.persistLocked()
 }
 
 // UpdateBucketVersioning updates one bucket versioning state.
@@ -144,7 +182,7 @@ func (s *memoryBackedStore) UpdateBucketVersioning(_ context.Context, bucket str
 	}
 	b.VersioningStatus = status
 	s.st.buckets[bucket] = b
-	return nil
+	return s.persistLocked()
 }
 
 // DeleteBucket deletes one bucket metadata record.
@@ -159,7 +197,7 @@ func (s *memoryBackedStore) DeleteBucket(_ context.Context, bucket string) error
 	delete(s.st.cors, bucket)
 	delete(s.st.policies, bucket)
 	delete(s.st.publicAccess, bucket)
-	return nil
+	return s.persistLocked()
 }
 
 // GetBucket fetches one bucket by name.
@@ -192,7 +230,7 @@ func (s *memoryBackedStore) PutBucketWebsite(_ context.Context, cfg BucketWebsit
 		return ErrNotFound
 	}
 	s.st.websites[cfg.Bucket] = cfg
-	return nil
+	return s.persistLocked()
 }
 
 // GetBucketWebsite fetches website config for one bucket.
@@ -214,7 +252,7 @@ func (s *memoryBackedStore) DeleteBucketWebsite(_ context.Context, bucket string
 		return ErrNotFound
 	}
 	delete(s.st.websites, bucket)
-	return nil
+	return s.persistLocked()
 }
 
 // PutBucketCORS creates or updates CORS config for one bucket.
@@ -225,7 +263,7 @@ func (s *memoryBackedStore) PutBucketCORS(_ context.Context, cfg BucketCORSConfi
 		return ErrNotFound
 	}
 	s.st.cors[cfg.Bucket] = cfg
-	return nil
+	return s.persistLocked()
 }
 
 // GetBucketCORS fetches CORS config for one bucket.
@@ -247,7 +285,7 @@ func (s *memoryBackedStore) DeleteBucketCORS(_ context.Context, bucket string) e
 		return ErrNotFound
 	}
 	delete(s.st.cors, bucket)
-	return nil
+	return s.persistLocked()
 }
 
 // PutBucketPolicy creates or updates policy for one bucket.
@@ -258,7 +296,7 @@ func (s *memoryBackedStore) PutBucketPolicy(_ context.Context, cfg BucketPolicy)
 		return ErrNotFound
 	}
 	s.st.policies[cfg.Bucket] = cfg
-	return nil
+	return s.persistLocked()
 }
 
 // GetBucketPolicy fetches policy for one bucket.
@@ -280,7 +318,7 @@ func (s *memoryBackedStore) DeleteBucketPolicy(_ context.Context, bucket string)
 		return ErrNotFound
 	}
 	delete(s.st.policies, bucket)
-	return nil
+	return s.persistLocked()
 }
 
 // PutBucketPublicAccessBlock creates or updates public access block for one bucket.
@@ -291,7 +329,7 @@ func (s *memoryBackedStore) PutBucketPublicAccessBlock(_ context.Context, cfg Bu
 		return ErrNotFound
 	}
 	s.st.publicAccess[cfg.Bucket] = cfg
-	return nil
+	return s.persistLocked()
 }
 
 // GetBucketPublicAccessBlock fetches public access block for one bucket.
@@ -313,7 +351,7 @@ func (s *memoryBackedStore) DeleteBucketPublicAccessBlock(_ context.Context, buc
 		return ErrNotFound
 	}
 	delete(s.st.publicAccess, bucket)
-	return nil
+	return s.persistLocked()
 }
 
 // ListObjects lists latest visible versions for one bucket.
@@ -340,7 +378,7 @@ func (s *memoryBackedStore) PutObjectVersion(_ context.Context, version ObjectVe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	putObjectVersion(&s.st, version)
-	return nil
+	return s.persistLocked()
 }
 
 // GetLatestObjectVersion returns the latest version for a key.
@@ -392,6 +430,9 @@ func (s *memoryBackedStore) DeleteAllObjectVersions(_ context.Context, bucket st
 		return nil, ErrNotFound
 	}
 	delete(s.st.objects, k)
+	if err := s.persistLocked(); err != nil {
+		return nil, err
+	}
 	return append([]ObjectVersion(nil), versions...), nil
 }
 
@@ -403,7 +444,7 @@ func (s *memoryBackedStore) CreateMultipartUpload(_ context.Context, upload Mult
 		return ErrConflict
 	}
 	s.st.multipart[upload.UploadID] = upload
-	return nil
+	return s.persistLocked()
 }
 
 // DeleteMultipartUpload deletes multipart upload metadata and parts.
@@ -415,7 +456,7 @@ func (s *memoryBackedStore) DeleteMultipartUpload(_ context.Context, uploadID st
 	}
 	delete(s.st.multipart, uploadID)
 	delete(s.st.parts, uploadID)
-	return nil
+	return s.persistLocked()
 }
 
 // UpsertMultipartPart creates or updates a multipart part row.
@@ -429,7 +470,7 @@ func (s *memoryBackedStore) UpsertMultipartPart(_ context.Context, part Multipar
 		s.st.parts[part.UploadID] = make(map[int]MultipartPart)
 	}
 	s.st.parts[part.UploadID][part.PartNumber] = part
-	return nil
+	return s.persistLocked()
 }
 
 // GetMultipartUpload returns upload metadata and sorted part list.
@@ -485,7 +526,7 @@ func (s *memoryBackedStore) UpsertCredentialRecord(_ context.Context, record Cre
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.st.credentials[record.AccessKeyID] = record
-	return nil
+	return s.persistLocked()
 }
 
 // GetCredentialRecord gets one credential metadata record.
@@ -510,6 +551,9 @@ func (s *memoryBackedStore) RunInTx(ctx context.Context, fn func(tx TxStore) err
 		return err
 	}
 	s.st = clone
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	_ = ctx
 	return nil
 }
@@ -525,7 +569,14 @@ func (s *memoryBackedStore) ValidateConsistency(_ context.Context) ([]Consistenc
 func (s *memoryBackedStore) RepairConsistency(_ context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return repairState(&s.st), nil
+	repaired := repairState(&s.st)
+	if repaired == 0 {
+		return 0, nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
+	return repaired, nil
 }
 
 type memoryTx struct {
@@ -614,6 +665,72 @@ func createBucket(st *memoryState, bucket Bucket) error {
 func putObjectVersion(st *memoryState, version ObjectVersion) {
 	k := objectKey{bucket: version.Bucket, key: version.Key}
 	st.objects[k] = append(st.objects[k], version)
+}
+
+func (s *memoryBackedStore) persistLocked() error {
+	if s.persister == nil {
+		return nil
+	}
+	return s.persister.Save(context.Background(), snapshotState(s.st))
+}
+
+func (s *memoryBackedStore) applyPersistedState(ps persistedState) {
+	st := emptyState(s.st.backendLabel)
+	if ps.Buckets != nil {
+		st.buckets = ps.Buckets
+	}
+	if ps.Multipart != nil {
+		st.multipart = ps.Multipart
+	}
+	if ps.Parts != nil {
+		st.parts = ps.Parts
+	}
+	if ps.Credentials != nil {
+		st.credentials = ps.Credentials
+	}
+	if ps.Websites != nil {
+		st.websites = ps.Websites
+	}
+	if ps.CORS != nil {
+		st.cors = ps.CORS
+	}
+	if ps.Policies != nil {
+		st.policies = ps.Policies
+	}
+	if ps.PublicAccess != nil {
+		st.publicAccess = ps.PublicAccess
+	}
+	for _, po := range ps.Objects {
+		k := objectKey{bucket: po.Bucket, key: po.Key}
+		st.objects[k] = append([]ObjectVersion(nil), po.Versions...)
+	}
+	s.st = st
+}
+
+func snapshotState(st memoryState) persistedState {
+	objects := make([]persistedObject, 0, len(st.objects))
+	for k, versions := range st.objects {
+		objects = append(objects, persistedObject{Bucket: k.bucket, Key: k.key, Versions: append([]ObjectVersion(nil), versions...)})
+	}
+	sort.Slice(objects, func(i, j int) bool {
+		if objects[i].Bucket == objects[j].Bucket {
+			return objects[i].Key < objects[j].Key
+		}
+		return objects[i].Bucket < objects[j].Bucket
+	})
+
+	return persistedState{
+		Buckets:      st.buckets,
+		Objects:      objects,
+		Multipart:    st.multipart,
+		Parts:        st.parts,
+		Credentials:  st.credentials,
+		Websites:     st.websites,
+		CORS:         st.cors,
+		Policies:     st.policies,
+		PublicAccess: st.publicAccess,
+		BackendLabel: st.backendLabel,
+	}
 }
 
 func cloneState(in memoryState) memoryState {

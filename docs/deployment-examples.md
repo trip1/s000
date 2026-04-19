@@ -20,6 +20,18 @@ docker run --rm -p 9000:9000 \
   s000:local
 ```
 
+Optional one-time startup import from host data:
+
+```bash
+docker run --rm -p 9000:9000 \
+  -e S000_ADMIN_ACCESS_KEY=admin \
+  -e S000_ADMIN_SECRET_KEY=change-me \
+  -e S000_IMPORT_DIRECTORY=/import \
+  -v s000-data:/var/lib/s000/data \
+  -v ./seed-data:/import:ro \
+  s000:local
+```
+
 After startup, verify:
 
 - API health: `curl -fsS http://127.0.0.1:9000/healthz`

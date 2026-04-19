@@ -211,11 +211,17 @@ func readBody(t *testing.T, resp *http.Response) string {
 }
 
 type listObjectsV2Result struct {
-	XMLName  xml.Name `xml:"ListBucketResult"`
-	Name     string   `xml:"Name"`
-	Contents []struct {
+	XMLName               xml.Name `xml:"ListBucketResult"`
+	Name                  string   `xml:"Name"`
+	KeyCount              int      `xml:"KeyCount"`
+	ContinuationToken     string   `xml:"ContinuationToken"`
+	NextContinuationToken string   `xml:"NextContinuationToken"`
+	Contents              []struct {
 		Key string `xml:"Key"`
 	} `xml:"Contents"`
+	CommonPrefixes []struct {
+		Prefix string `xml:"Prefix"`
+	} `xml:"CommonPrefixes"`
 }
 
 func TestListObjectsResponseXMLShape(t *testing.T) {
@@ -236,6 +242,109 @@ func TestListObjectsResponseXMLShape(t *testing.T) {
 	}
 	if len(result.Contents) == 0 {
 		t.Fatal("expected at least one content item")
+	}
+}
+
+func TestListObjectsV2WithDelimiterReturnsCommonPrefixes(t *testing.T) {
+	t.Parallel()
+
+	h := newS3TestHandler(t)
+	_ = execute(t, h, http.MethodPut, "/photos", "")
+	_ = execute(t, h, http.MethodPut, "/photos/a/1.txt", "1")
+	_ = execute(t, h, http.MethodPut, "/photos/a/2.txt", "2")
+	_ = execute(t, h, http.MethodPut, "/photos/b/3.txt", "3")
+	_ = execute(t, h, http.MethodPut, "/photos/root.txt", "r")
+
+	resp := execute(t, h, http.MethodGet, "/photos?list-type=2&delimiter=/", "")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
+	}
+
+	var result listObjectsV2Result
+	if err := xml.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("xml decode failed: %v body=%s", err, body)
+	}
+
+	if got, want := len(result.CommonPrefixes), 2; got != want {
+		t.Fatalf("common prefixes count = %d, want %d body=%s", got, want, body)
+	}
+	if result.CommonPrefixes[0].Prefix != "a/" {
+		t.Fatalf("first common prefix = %q", result.CommonPrefixes[0].Prefix)
+	}
+	if result.CommonPrefixes[1].Prefix != "b/" {
+		t.Fatalf("second common prefix = %q", result.CommonPrefixes[1].Prefix)
+	}
+	if got, want := len(result.Contents), 1; got != want {
+		t.Fatalf("contents count = %d, want %d body=%s", got, want, body)
+	}
+	if result.Contents[0].Key != "root.txt" {
+		t.Fatalf("content key = %q, want root.txt", result.Contents[0].Key)
+	}
+	if result.KeyCount != 3 {
+		t.Fatalf("key count = %d, want 3", result.KeyCount)
+	}
+}
+
+func TestListObjectsV2PaginationUsesOpaqueContinuationToken(t *testing.T) {
+	t.Parallel()
+
+	h := newS3TestHandler(t)
+	_ = execute(t, h, http.MethodPut, "/photos", "")
+	_ = execute(t, h, http.MethodPut, "/photos/a/1.txt", "1")
+	_ = execute(t, h, http.MethodPut, "/photos/b/1.txt", "1")
+	_ = execute(t, h, http.MethodPut, "/photos/root.txt", "r")
+
+	resp := execute(t, h, http.MethodGet, "/photos?list-type=2&delimiter=/&max-keys=2", "")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list page1 status=%d body=%s", resp.StatusCode, body)
+	}
+
+	var page1 listObjectsV2Result
+	if err := xml.Unmarshal([]byte(body), &page1); err != nil {
+		t.Fatalf("xml decode failed: %v body=%s", err, body)
+	}
+	if page1.NextContinuationToken == "" {
+		t.Fatalf("expected next continuation token body=%s", body)
+	}
+	if strings.Contains(page1.NextContinuationToken, "root.txt") {
+		t.Fatalf("expected opaque token, got %q", page1.NextContinuationToken)
+	}
+
+	resp = execute(t, h, http.MethodGet, "/photos?list-type=2&delimiter=/&max-keys=2&continuation-token="+page1.NextContinuationToken, "")
+	body = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list page2 status=%d body=%s", resp.StatusCode, body)
+	}
+
+	var page2 listObjectsV2Result
+	if err := xml.Unmarshal([]byte(body), &page2); err != nil {
+		t.Fatalf("xml decode failed: %v body=%s", err, body)
+	}
+	if len(page2.Contents) != 1 || page2.Contents[0].Key != "root.txt" {
+		t.Fatalf("unexpected page2 contents body=%s", body)
+	}
+}
+
+func TestListObjectsV2InvalidContinuationToken(t *testing.T) {
+	t.Parallel()
+
+	h := newS3TestHandler(t)
+	_ = execute(t, h, http.MethodPut, "/photos", "")
+	_ = execute(t, h, http.MethodPut, "/photos/alpha.txt", "a")
+
+	resp := execute(t, h, http.MethodGet, "/photos?list-type=2&continuation-token=invalid-token", "")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, body)
+	}
+	var e s3ErrorBody
+	if err := xml.Unmarshal([]byte(body), &e); err != nil {
+		t.Fatalf("xml decode error response failed: %v body=%s", err, body)
+	}
+	if e.Code != "InvalidArgument" {
+		t.Fatalf("error code=%q want InvalidArgument body=%s", e.Code, body)
 	}
 }
 

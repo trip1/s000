@@ -23,23 +23,38 @@
 {{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
 <figure>
   <table>
-    <thead><tr><th>Key</th><th>Size</th><th>Last Modified</th></tr></thead>
+    <thead><tr><th>Key</th><th>Size</th><th>Last Modified</th><th>Actions</th></tr></thead>
     <tbody>
       {{range .CommonPrefixes}}
         <tr>
-          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}">{{.}}</a></td>
+          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">{{.}}</a></td>
           <td>-</td>
           <td>prefix</td>
+          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">Open</a></td>
         </tr>
       {{end}}
-      {{if not .Objects}}
-        <tr><td colspan="3">No objects found.</td></tr>
+      {{if and (not .Objects) (not .CommonPrefixes)}}
+        <tr><td colspan="4">No objects found.</td></tr>
       {{end}}
       {{range .Objects}}
         <tr>
-          <td><a href="/app/buckets/{{p $.BucketName}}/objects/{{p .Key}}">{{.Key}}</a></td>
+          <td>{{if hasSuffix .Key "/"}}{{.Key}}{{else}}<a href="/app/buckets/{{p $.BucketName}}/objects/{{p .Key}}">{{.Key}}</a>{{end}}</td>
           <td>{{.Size}}</td>
           <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+          <td>
+            {{if hasSuffix .Key "/"}}
+              <form method="post" action="/app/actions/delete-folder-marker" onsubmit="return confirm('Delete this folder marker object?');">
+                <input type="hidden" name="_csrf" value="{{$.CSRFToken}}">
+                <input type="hidden" name="bucket" value="{{$.BucketName}}">
+                <input type="hidden" name="key" value="{{.Key}}">
+                <input type="hidden" name="prefix" value="{{$.Prefix}}">
+                <input type="hidden" name="delimiter" value="{{$.Delimiter}}">
+                <button type="submit">Delete marker</button>
+              </form>
+            {{else}}
+              <span>-</span>
+            {{end}}
+          </td>
         </tr>
       {{end}}
     </tbody>
@@ -84,4 +99,82 @@
     <span>End of results</span>
   {{end}}
 </nav>
+{{end}}
+
+{{define "partials/token_create_result"}}
+{{if .GeneratedToken}}
+<div class="flash success" role="status" aria-live="polite">
+  <p>Token created. Copy it now; it will not be shown again in this session view.</p>
+  <code data-generated-token>{{.GeneratedToken}}</code>
+</div>
+{{end}}
+{{end}}
+
+{{define "partials/tokens_table"}}
+<figure>
+  <table>
+    <thead><tr><th>Label</th><th>Subject</th><th>Created</th><th>Expires</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+      {{if not .Tokens}}
+        <tr><td colspan="6">No tokens issued yet.</td></tr>
+      {{end}}
+      {{range .Tokens}}
+        <tr data-token-id="{{.ID}}">
+          <td>{{if .Label}}{{.Label}}{{else}}-{{end}}</td>
+          <td>{{.Subject}}</td>
+          <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+          <td>{{.ExpiresAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+          <td>{{if .Revoked}}revoked{{else}}active{{end}}</td>
+          <td>
+            {{if .Revoked}}
+              <span>Revoked</span>
+            {{else}}
+              <form method="post" action="/app/actions/tokens/revoke" hx-post="/app/actions/tokens/revoke" hx-target="#flash-slot" hx-swap="innerHTML" onsubmit="return confirm('Revoke this token?');">
+                <input type="hidden" name="_csrf" value="{{$.CSRFToken}}">
+                <input type="hidden" name="token_id" value="{{.ID}}">
+                <button type="submit">Revoke</button>
+              </form>
+            {{end}}
+          </td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</figure>
+<div id="flash-slot"></div>
+{{end}}
+
+{{define "partials/dashboard_api_stats"}}
+<article>
+  <h2>API request stats</h2>
+  <dl>
+    <dt>Total requests</dt><dd>{{.APIRequestStats.TotalRequests}}</dd>
+    <dt>Error requests</dt><dd>{{.APIRequestStats.ErrorRequests}}</dd>
+    <dt>4xx requests</dt><dd>{{.APIRequestStats.Error4xxRequests}}</dd>
+    <dt>5xx requests</dt><dd>{{.APIRequestStats.Error5xxRequests}}</dd>
+    <dt>Success rate</dt><dd>{{printf "%.2f" .APIRequestStats.SuccessRatePct}}%</dd>
+    <dt>Average latency</dt><dd>{{printf "%.2f" .APIRequestStats.AvgLatencyMS}} ms</dd>
+    <dt>P95 latency</dt><dd>{{printf "%.2f" .APIRequestStats.P95LatencyMS}} ms</dd>
+    <dt>Total bytes in</dt><dd>{{.APIRequestStats.BytesInTotal}}</dd>
+    <dt>Total bytes out</dt><dd>{{.APIRequestStats.BytesOutTotal}}</dd>
+  </dl>
+  <h3>Request volume trend</h3>
+  <p><small>Last {{.APIRequestStats.TrendWindow}} minutes (max {{.APIRequestStats.TrendMax}} requests/min).</small></p>
+  {{if .APIRequestStats.TrendPoints}}
+    <svg viewBox="0 0 280 64" role="img" aria-label="API request trend over time" style="width:100%;max-width:320px;height:auto;display:block;">
+      <polyline points="{{.APIRequestStats.TrendPoints}}" fill="none" stroke="var(--primary-color)" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+    </svg>
+  {{else}}
+    <p>No request trend data yet.</p>
+  {{end}}
+  <h3>Error trend</h3>
+  <p><small>Current error rate {{printf "%.2f" .APIRequestStats.ErrorRateTrendLast}}%; peak {{printf "%.2f" .APIRequestStats.ErrorRateTrendMax}}% in window.</small></p>
+  {{if .APIRequestStats.ErrorTrendPoints}}
+    <svg viewBox="0 0 280 64" role="img" aria-label="API error trend over time" style="width:100%;max-width:320px;height:auto;display:block;">
+      <polyline points="{{.APIRequestStats.ErrorTrendPoints}}" fill="none" stroke="#f85149" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+    </svg>
+  {{else}}
+    <p>No error trend data yet.</p>
+  {{end}}
+</article>
 {{end}}

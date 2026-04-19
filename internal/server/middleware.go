@@ -115,6 +115,43 @@ func withAuthGate(next http.Handler, opts Options) http.Handler {
 			return
 		}
 
+		if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
+			var (
+				subject string
+				err     error
+			)
+			if opts.PATManager != nil {
+				subject, err = opts.PATManager.Verify(token)
+			} else {
+				subject, err = auth.VerifyPersonalAccessToken(token, []byte(opts.PATSigningKey), time.Now().UTC())
+			}
+			if err != nil {
+				if protector := opts.AuthFailureProtector; protector != nil {
+					protector.RecordFailure(identity, time.Now().UTC())
+				}
+				emitAuditEvent(opts, AuditEvent{
+					Action:    "auth.failure",
+					Outcome:   "deny",
+					RequestID: RequestIDFromContext(r.Context()),
+					Principal: extractPrincipalID(r),
+					Reason:    "AccessDenied",
+				})
+				writeS3Error(w, r, s3ErrorSpec{
+					StatusCode: http.StatusForbidden,
+					Code:       "AccessDenied",
+					Message:    "Access Denied",
+					Resource:   r.URL.Path,
+				})
+				return
+			}
+			if protector := opts.AuthFailureProtector; protector != nil {
+				protector.RecordSuccess(identity)
+			}
+			r = r.WithContext(withPrincipalContext(r.Context(), subject))
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		verifier := opts.Verifier
 		if verifier == nil {
 			writeS3Error(w, r, s3ErrorSpec{
@@ -260,6 +297,12 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func shouldBypassGuards(path string, metricsPath string) bool {
 	if metricsPath == "" {
 		metricsPath = "/metrics"
@@ -281,6 +324,15 @@ func shouldBypassAuth(path string, metricsPath string) bool {
 }
 
 func extractPrincipalID(r *http.Request) string {
+	if principal := PrincipalFromContext(r.Context()); principal != "" {
+		return principal
+	}
+	if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
+		if subject := auth.PersonalAccessTokenSubject(token); subject != "" {
+			return subject
+		}
+		return "pat"
+	}
 	authz := r.Header.Get("Authorization")
 	if i := strings.Index(authz, "Credential="); i >= 0 {
 		value := authz[i+len("Credential="):]
@@ -299,4 +351,19 @@ func extractPrincipalID(r *http.Request) string {
 		}
 	}
 	return ""
+}
+
+func bearerToken(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) < 7 {
+		return "", false
+	}
+	if !strings.EqualFold(value[:7], "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimSpace(value[7:])
+	if token == "" {
+		return "", false
+	}
+	return token, true
 }

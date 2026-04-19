@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -388,55 +390,137 @@ func (a *s3API) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buck
 	}
 	continuation := q.Get("continuation-token")
 
-	type content struct {
-		Key  string `xml:"Key"`
-		Size int64  `xml:"Size"`
-		ETag string `xml:"ETag"`
-	}
-	type listResult struct {
-		XMLName               xml.Name  `xml:"ListBucketResult"`
-		Name                  string    `xml:"Name"`
-		Prefix                string    `xml:"Prefix,omitempty"`
-		Delimiter             string    `xml:"Delimiter,omitempty"`
-		MaxKeys               int       `xml:"MaxKeys"`
-		IsTruncated           bool      `xml:"IsTruncated"`
-		ContinuationToken     string    `xml:"ContinuationToken,omitempty"`
-		NextContinuationToken string    `xml:"NextContinuationToken,omitempty"`
-		Contents              []content `xml:"Contents"`
-	}
-	out := listResult{Name: bucket, Prefix: prefix, Delimiter: delimiter, MaxKeys: maxKeys, ContinuationToken: continuation}
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
 
+	startAfter, err := decodeListContinuationToken(continuation, prefix, delimiter)
+	if err != nil {
+		writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusBadRequest, Code: "InvalidArgument", Message: "Invalid continuation-token.", Resource: "/" + bucket})
+		return
+	}
+
+	entries := listV2EntriesFromObjects(objects, prefix, delimiter)
 	startIdx := 0
-	if continuation != "" {
-		for i, obj := range objects {
-			if obj.Key == continuation {
-				startIdx = i + 1
+	if startAfter != "" {
+		startIdx = len(entries)
+		for i, entry := range entries {
+			if entry.Value > startAfter {
+				startIdx = i
 				break
 			}
 		}
 	}
 
-	count := 0
-	for i := startIdx; i < len(objects); i++ {
-		obj := objects[i]
-		if prefix != "" && !strings.HasPrefix(obj.Key, prefix) {
-			continue
+	type content struct {
+		Key  string `xml:"Key"`
+		Size int64  `xml:"Size"`
+		ETag string `xml:"ETag"`
+	}
+	type commonPrefix struct {
+		Prefix string `xml:"Prefix"`
+	}
+	type listResult struct {
+		XMLName               xml.Name       `xml:"ListBucketResult"`
+		Name                  string         `xml:"Name"`
+		Prefix                string         `xml:"Prefix,omitempty"`
+		Delimiter             string         `xml:"Delimiter,omitempty"`
+		MaxKeys               int            `xml:"MaxKeys"`
+		KeyCount              int            `xml:"KeyCount"`
+		IsTruncated           bool           `xml:"IsTruncated"`
+		ContinuationToken     string         `xml:"ContinuationToken,omitempty"`
+		NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
+		Contents              []content      `xml:"Contents"`
+		CommonPrefixes        []commonPrefix `xml:"CommonPrefixes,omitempty"`
+	}
+	out := listResult{Name: bucket, Prefix: prefix, Delimiter: delimiter, MaxKeys: maxKeys, ContinuationToken: continuation}
+
+	for i := startIdx; i < len(entries) && out.KeyCount < maxKeys; i++ {
+		entry := entries[i]
+		if entry.Object != nil {
+			out.Contents = append(out.Contents, content{Key: entry.Value, Size: entry.Object.Size, ETag: quotedETag(entry.Object.ETag)})
+		} else {
+			out.CommonPrefixes = append(out.CommonPrefixes, commonPrefix{Prefix: entry.Value})
 		}
-		if delimiter != "" && strings.Contains(strings.TrimPrefix(obj.Key, prefix), delimiter) {
-			continue
-		}
-		out.Contents = append(out.Contents, content{Key: obj.Key, Size: obj.Size, ETag: quotedETag(obj.ETag)})
-		count++
-		if count >= maxKeys {
-			out.IsTruncated = i+1 < len(objects)
-			if out.IsTruncated {
-				out.NextContinuationToken = obj.Key
+		out.KeyCount++
+		if out.KeyCount == maxKeys && i+1 < len(entries) {
+			token, encErr := encodeListContinuationToken(prefix, delimiter, entry.Value)
+			if encErr != nil {
+				writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "List objects failed.", Resource: "/" + bucket})
+				return
 			}
-			break
+			out.IsTruncated = true
+			out.NextContinuationToken = token
 		}
 	}
 
 	writeXML(w, http.StatusOK, out)
+}
+
+type listV2Entry struct {
+	Value  string
+	Object *metadata.ObjectVersion
+}
+
+func listV2EntriesFromObjects(objects []metadata.ObjectVersion, prefix string, delimiter string) []listV2Entry {
+	entries := make([]listV2Entry, 0, len(objects))
+	commonPrefixes := make(map[string]struct{})
+	for i := range objects {
+		obj := objects[i]
+		if prefix != "" && !strings.HasPrefix(obj.Key, prefix) {
+			continue
+		}
+		if delimiter != "" {
+			tail := strings.TrimPrefix(obj.Key, prefix)
+			if idx := strings.Index(tail, delimiter); idx >= 0 {
+				cp := prefix + tail[:idx+len(delimiter)]
+				if _, exists := commonPrefixes[cp]; exists {
+					continue
+				}
+				commonPrefixes[cp] = struct{}{}
+				entries = append(entries, listV2Entry{Value: cp})
+				continue
+			}
+		}
+		copyObj := obj
+		entries = append(entries, listV2Entry{Value: obj.Key, Object: &copyObj})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Value < entries[j].Value
+	})
+	return entries
+}
+
+type listV2ContinuationToken struct {
+	Prefix    string `json:"p"`
+	Delimiter string `json:"d"`
+	After     string `json:"a"`
+}
+
+func encodeListContinuationToken(prefix, delimiter, after string) (string, error) {
+	payload, err := json.Marshal(listV2ContinuationToken{Prefix: prefix, Delimiter: delimiter, After: after})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeListContinuationToken(token, prefix, delimiter string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return "", err
+	}
+	var decoded listV2ContinuationToken
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return "", err
+	}
+	if decoded.Prefix != prefix || decoded.Delimiter != delimiter || decoded.After == "" {
+		return "", fmt.Errorf("token mismatch")
+	}
+	return decoded.After, nil
 }
 
 func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {

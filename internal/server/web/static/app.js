@@ -17,6 +17,35 @@
 
     var progress = document.getElementById("upload-progress")
     var status = document.getElementById("upload-status")
+    var keyInput = form.querySelector("[data-upload-key]")
+    var fileInput = form.querySelector("[data-upload-file]")
+    var prefixInput = form.querySelector("input[name='prefix']")
+    var prefillButton = form.querySelector("[data-upload-prefill]")
+
+    function normalizePrefix(prefix) {
+      var value = (prefix || "").trim()
+      if (!value) return ""
+      if (value.charAt(value.length - 1) !== "/") value += "/"
+      return value
+    }
+
+    if (prefillButton) {
+      prefillButton.addEventListener("click", function () {
+        if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+          if (status) status.textContent = "Choose a file first to prefill object key."
+          return
+        }
+        if (!keyInput) return
+        var filename = fileInput.files[0].name || ""
+        if (!filename) {
+          if (status) status.textContent = "Selected file has no name."
+          return
+        }
+        var prefix = normalizePrefix(prefixInput ? prefixInput.value : "")
+        keyInput.value = prefix + filename
+        if (status) status.textContent = "Object key prefilled from current folder."
+      })
+    }
 
     form.addEventListener("submit", function (evt) {
       if (!window.XMLHttpRequest || !window.FormData) return

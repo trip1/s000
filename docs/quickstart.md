@@ -26,6 +26,7 @@ s000 requires initial admin credentials to boot. Set these environment variables
 ```bash
 export S000_ADMIN_ACCESS_KEY=admin
 export S000_ADMIN_SECRET_KEY=change-me-in-production
+export S000_PAT_SIGNING_KEY=change-me-in-production
 ```
 
 These credentials are used for:
@@ -38,6 +39,14 @@ These credentials are used for:
 ```bash
 go run ./cmd/s000
 ```
+
+Optional: import an existing directory tree at startup (top-level folders become buckets, nested paths become object keys):
+
+```bash
+go run ./cmd/s000 --import-directory ./seed-data
+```
+
+You can also configure the same behavior with `S000_IMPORT_DIRECTORY=./seed-data`.
 
 The server binds to `:9000` by default. Verify it's running:
 
@@ -75,6 +84,17 @@ aws --endpoint-url http://127.0.0.1:9000 s3api list-objects-v2 --bucket my-bucke
 
 # Copy object
 aws --endpoint-url http://127.0.0.1:9000 s3 cp s3://my-bucket/hello.txt s3://my-bucket/hello-copy.txt
+
+# Create personal access token for bearer auth
+TOKEN=$(go run ./cmd/s000ctl token-create --subject local-cli --ttl 24h)
+
+# Upload with s000ctl + bearer token
+go run ./cmd/s000ctl put-object \
+  --endpoint http://127.0.0.1:9000 \
+  --bucket my-bucket \
+  --key cli-upload.txt \
+  --file ./README.md \
+  --token "$TOKEN"
 ```
 
 ### 5. Web UI
@@ -111,11 +131,19 @@ export S000_TLS_KEY_FILE=/etc/s000/tls.key
 |----------|---------|-------------|
 | `S000_ADDR` | `:9000` | API server bind address |
 | `S000_DATA_DIR` | `./data` | Blob storage root directory |
+| `S000_IMPORT_DIRECTORY` | (none) | Optional startup import path; top-level folders become buckets and files are imported as objects |
 | `S000_METADATA_BACKEND` | `sqlite` | Metadata backend: `sqlite`, `libsql`, `postgresql`, `mariadb`, `valkey` |
-| `S000_METADATA_DSN` | `file:./data/s000-metadata.db` | Metadata connection string |
+| `S000_METADATA_DSN` | `file:<S000_DATA_DIR>/s000-metadata.db` | Metadata catalog file/connection string (catalog snapshot reloaded at startup for the selected backend) |
 | `S000_DOMAIN` | (none) | Virtual-host domain suffix |
 | `S000_ADMIN_ACCESS_KEY` | (required) | Bootstrap admin access key |
 | `S000_ADMIN_SECRET_KEY` | (required) | Bootstrap admin secret key |
+| `S000_PAT_SIGNING_KEY` | (fallback to `S000_ADMIN_SECRET_KEY`) | Signing key for personal access tokens |
+| `S000_UI_THEME` | `sysadmin90` | Default embedded UI theme |
+| `S000_UI_SSE_DASHBOARD_STATS_INTERVAL` | `2s` | Dashboard API stats SSE refresh interval |
+| `S000_UI_SSE_BUCKETS_INTERVAL` | `10s` | Buckets page table SSE refresh interval |
+| `S000_UI_SSE_TOKENS_INTERVAL` | `10s` | Tokens page table SSE refresh interval |
+| `S000_UI_SSE_OBJECTS_INTERVAL` | `10s` | Objects table SSE refresh interval |
+| `S000_UI_SSE_OBJECT_METADATA_INTERVAL` | `10s` | Object metadata SSE refresh interval |
 | `S000_TLS_ENABLED` | `false` | Enable TLS |
 | `S000_TLS_CERT_FILE` | (none) | TLS certificate path |
 | `S000_TLS_KEY_FILE` | (none) | TLS key path |

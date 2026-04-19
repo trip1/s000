@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -288,5 +289,70 @@ func TestBucketPolicyAndSettingsCRUD(t *testing.T) {
 	}
 	if _, err := store.GetBucketPublicAccessBlock(ctx, "ops"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected public access block not found after delete, got %v", err)
+	}
+}
+
+func TestStartupReindexFromPersistedCatalog(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	dsn := "file:" + filepath.Join(t.TempDir(), "s000-metadata.db")
+
+	storeA, err := NewStore(Config{Backend: BackendSQLite, DSN: dsn, NowProvider: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("new store A failed: %v", err)
+	}
+	if err := storeA.CreateBucket(ctx, Bucket{Name: "photos", CreatedAt: now}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	if err := storeA.PutObjectVersion(ctx, ObjectVersion{Bucket: "photos", Key: "a.jpg", VersionID: "null", Size: 10, ETag: "e", ChecksumSHA256: "s", StoragePath: "/tmp/obj", CreatedAt: now}); err != nil {
+		t.Fatalf("put object failed: %v", err)
+	}
+
+	storeB, err := NewStore(Config{Backend: BackendSQLite, DSN: dsn, NowProvider: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("new store B failed: %v", err)
+	}
+	if _, err := storeB.GetBucket(ctx, "photos"); err != nil {
+		t.Fatalf("expected persisted bucket, got %v", err)
+	}
+	if _, err := storeB.GetLatestObjectVersion(ctx, "photos", "a.jpg"); err != nil {
+		t.Fatalf("expected persisted object, got %v", err)
+	}
+}
+
+func TestStartupReindexFromProvidedSQLConnection(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	dsn := "file:" + filepath.Join(t.TempDir(), "sql-conn-metadata.db")
+
+	connA, err := OpenConnections(ctx, Config{Backend: BackendSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("open connections A failed: %v", err)
+	}
+	defer func() { _ = connA.Close() }()
+
+	storeA, err := NewStore(Config{Backend: BackendSQLite, DSN: dsn, SQLDB: connA.SQLDB, NowProvider: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("new store A failed: %v", err)
+	}
+	if err := storeA.CreateBucket(ctx, Bucket{Name: "docs", CreatedAt: now}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	connB, err := OpenConnections(ctx, Config{Backend: BackendSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("open connections B failed: %v", err)
+	}
+	defer func() { _ = connB.Close() }()
+	storeB, err := NewStore(Config{Backend: BackendSQLite, DSN: dsn, SQLDB: connB.SQLDB, NowProvider: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("new store B failed: %v", err)
+	}
+	if _, err := storeB.GetBucket(ctx, "docs"); err != nil {
+		t.Fatalf("expected persisted bucket via sql connection, got %v", err)
 	}
 }

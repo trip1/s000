@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"ds9labs.com/s000/internal/auth"
 	"ds9labs.com/s000/internal/blob"
+	"ds9labs.com/s000/internal/bootstrap"
 	"ds9labs.com/s000/internal/config"
 	"ds9labs.com/s000/internal/lifecycle"
 	"ds9labs.com/s000/internal/metadata"
@@ -22,6 +25,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	importDirectory := flag.String("import-directory", cfg.ImportDirectory, "import existing directory tree into buckets at startup")
+	flag.Parse()
+	cfg.ImportDirectory = strings.TrimSpace(*importDirectory)
 	if err := config.ValidateTLSEnabledSettings(cfg); err != nil {
 		log.Fatal(err)
 	}
@@ -42,16 +48,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	metadataStore, err := metadata.NewStore(metadata.Config{
-		Backend:    metadataBackend,
-		DSN:        cfg.MetadataDSN,
-		ValkeyAddr: cfg.MetadataValkeyAddr,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	_ = metadataStore
-
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MetadataConnectTimeout)
 	defer cancelConnect()
 	metadataConnections, err := metadata.OpenConnections(connectCtx, metadata.Config{
@@ -68,12 +64,42 @@ func main() {
 		}
 	}()
 
+	metadataStore, err := metadata.NewStore(metadata.Config{
+		Backend:    metadataBackend,
+		DSN:        cfg.MetadataDSN,
+		ValkeyAddr: cfg.MetadataValkeyAddr,
+		SQLDB:      metadataConnections.SQLDB,
+		Valkey:     metadataConnections.Valkey,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	bucketCount, objectCount, err := metadataCatalogCounts(context.Background(), metadataStore)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if bucketCount > 0 || objectCount > 0 {
+		slog.Info("startup metadata reindex complete", "buckets", bucketCount, "objects", objectCount)
+	}
+
 	blobStore, err := blob.NewStore(blob.Config{
 		RootDir:   cfg.DataDir,
 		FsyncMode: blob.FsyncSafe,
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+	if cfg.ImportDirectory != "" {
+		importResult, err := bootstrap.ImportDirectory(context.Background(), bootstrap.ImportOptions{
+			Directory: cfg.ImportDirectory,
+			Region:    "us-east-1",
+			Metadata:  metadataStore,
+			Blob:      blobStore,
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		slog.Info("startup import completed", "directory", cfg.ImportDirectory, "buckets_created", importResult.BucketsCreated, "objects_added", importResult.ObjectsAdded, "objects_skipped", importResult.ObjectsSkipped)
 	}
 
 	metrics := observability.NewCollector()
@@ -129,10 +155,21 @@ func main() {
 		}()
 	}
 
+	patSigningKey := cfg.PATSigningKey
+	if patSigningKey == "" {
+		patSigningKey = cfg.AdminSecretKey
+	}
+	var patManager *auth.PersonalAccessTokenManager
+	if patSigningKey != "" {
+		patManager = auth.NewPersonalAccessTokenManager([]byte(patSigningKey), timeNow)
+	}
+
 		handler := server.NewHandler(server.Options{
 		Domain:            cfg.Domain,
 		MaxInFlight:       cfg.MaxInFlight,
 		Verifier:          verifier,
+		PATSigningKey:     patSigningKey,
+		PATManager:        patManager,
 		Metadata:          metadataStore,
 		Blob:              blobStore,
 		Lifecycle:         lifecycleWorker,
@@ -147,12 +184,17 @@ func main() {
 		UIAccessKey:       cfg.AdminAccessKey,
 		UISecretKey:       cfg.AdminSecretKey,
 		UITheme:           cfg.UITheme,
+		UIDashboardStatsSSE: cfg.UIDashboardStatsSSE,
+		UIBucketsSSE:        cfg.UIBucketsSSE,
+		UITokensSSE:         cfg.UITokensSSE,
+		UIObjectsSSE:        cfg.UIObjectsSSE,
+		UIObjectMetadataSSE: cfg.UIObjectMetadataSSE,
 		ReadyCheck: func(ctx context.Context) error {
 			return metadataConnections.Ping(ctx)
 		},
-		Tracing:                           observability.NoopTraceHooks(),
-		TracingOn:                         cfg.TracingEnabled,
-		BucketRegion:                      "us-east-1",
+		Tracing:      observability.NoopTraceHooks(),
+		TracingOn:    cfg.TracingEnabled,
+		BucketRegion: "us-east-1",
 	})
 	httpServer := server.NewHTTPServerWithOptions(cfg.Addr, handler, server.HTTPServerOptions{
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
@@ -224,4 +266,20 @@ func main() {
 
 func timeNow() time.Time {
 	return time.Now().UTC()
+}
+
+func metadataCatalogCounts(ctx context.Context, store metadata.Store) (int, int, error) {
+	buckets, err := store.ListBuckets(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	objectCount := 0
+	for _, bucket := range buckets {
+		objects, err := store.ListObjects(ctx, bucket.Name)
+		if err != nil {
+			return 0, 0, err
+		}
+		objectCount += len(objects)
+	}
+	return len(buckets), objectCount, nil
 }

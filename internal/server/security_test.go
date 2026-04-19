@@ -2,10 +2,13 @@ package server
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"ds9labs.com/s000/internal/auth"
 )
 
 func TestAuthFailureProtectorBlocksRepeatedFailures(t *testing.T) {
@@ -65,6 +68,94 @@ func TestAuditEventsForDestructiveOperations(t *testing.T) {
 	}
 	if !foundDelete {
 		t.Fatal("expected object.delete audit event")
+	}
+}
+
+func TestAuthGateAllowsPersonalAccessToken(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	token, err := auth.CreatePersonalAccessToken("cli-user", []byte("signing-key"), now, time.Hour)
+	if err != nil {
+		t.Fatalf("create personal access token failed: %v", err)
+	}
+
+	h := withAuthGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, PrincipalFromContext(r.Context()))
+	}), Options{
+		Verifier:          denyMissingAuthVerifier{},
+		PATSigningKey:     "signing-key",
+		AuthFailThreshold: 5,
+		AuthFailWindow:    time.Minute,
+		AuthBlockDuration: time.Minute,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/bucket/key", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if rr.Body.String() != "cli-user" {
+		t.Fatalf("expected principal cli-user, got %q", rr.Body.String())
+	}
+}
+
+func TestAuthGateRejectsInvalidPersonalAccessToken(t *testing.T) {
+	t.Parallel()
+
+	h := withAuthGate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("expected auth gate to reject invalid token")
+	}), Options{
+		Verifier:          allowAllVerifier{},
+		PATSigningKey:     "signing-key",
+		AuthFailThreshold: 5,
+		AuthFailWindow:    time.Minute,
+		AuthBlockDuration: time.Minute,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/bucket/key", nil)
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rr.Code)
+	}
+}
+
+func TestAuthGateRejectsRevokedPersonalAccessToken(t *testing.T) {
+	t.Parallel()
+
+	manager := auth.NewPersonalAccessTokenManager([]byte("signing-key"), time.Now)
+	token, issued, err := manager.Issue("cli-user", time.Hour, "test")
+	if err != nil {
+		t.Fatalf("issue token failed: %v", err)
+	}
+	if err := manager.Revoke(issued.ID); err != nil {
+		t.Fatalf("revoke token failed: %v", err)
+	}
+
+	h := withAuthGate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("expected auth gate to reject revoked token")
+	}), Options{
+		Verifier:          allowAllVerifier{},
+		PATSigningKey:     "signing-key",
+		PATManager:        manager,
+		AuthFailThreshold: 5,
+		AuthFailWindow:    time.Minute,
+		AuthBlockDuration: time.Minute,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/bucket/key", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 

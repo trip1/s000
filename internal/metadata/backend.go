@@ -1,9 +1,12 @@
 package metadata
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Backend identifies a metadata backend type.
@@ -37,6 +40,8 @@ type Config struct {
 	DSN         string
 	ValkeyAddr  string
 	NowProvider func() time.Time
+	SQLDB       *sql.DB
+	Valkey      *redis.Client
 }
 
 // ParseBackend parses and validates a backend value.

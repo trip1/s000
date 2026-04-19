@@ -14,6 +14,7 @@ Full pages:
 - `GET /app/buckets/:bucket/objects/:key` - object detail shell.
 - `GET /app/uploads` - multipart upload monitor shell.
 - `GET /app/settings` - client/session settings shell.
+- `GET /app/tokens` - personal access token management shell.
 - `GET /app/audit` - audit events shell.
 
 htmx partials:
@@ -23,6 +24,16 @@ htmx partials:
 - `GET /app/partials/object-metadata`
 - `GET /app/partials/flash`
 - `GET /app/partials/pagination`
+- `GET /app/partials/tokens`
+- `GET /app/partials/dashboard-stats`
+
+SSE streams (htmx `sse` extension):
+
+- `GET /app/events/dashboard-stats`
+- `GET /app/events/buckets`
+- `GET /app/events/tokens`
+- `GET /app/events/objects`
+- `GET /app/events/object-metadata`
 
 Static assets:
 
@@ -47,6 +58,11 @@ Static assets:
   - `POST /app/actions/create-bucket`
   - `POST /app/actions/upload-object`
   - `POST /app/actions/delete-object`
+  - `POST /app/actions/create-folder`
+  - `POST /app/actions/delete-folder-marker`
+- Token management form actions are available via htmx:
+  - `POST /app/actions/tokens/create`
+  - `POST /app/actions/tokens/revoke`
 - Download action is available for object detail pages:
   - `GET /app/actions/download-object?bucket=<bucket>&key=<key>`
 
@@ -57,6 +73,12 @@ Static assets:
 - Session TTL: 12 hours.
 - Global default theme can be configured via `S000_UI_THEME`.
 - Per-session theme override is stored in cookie `s000_ui_theme` from `/app/settings`.
+- SSE refresh cadence can be tuned with environment variables:
+  - `S000_UI_SSE_DASHBOARD_STATS_INTERVAL` (default `2s`)
+  - `S000_UI_SSE_BUCKETS_INTERVAL` (default `10s`)
+  - `S000_UI_SSE_TOKENS_INTERVAL` (default `10s`)
+  - `S000_UI_SSE_OBJECTS_INTERVAL` (default `10s`)
+  - `S000_UI_SSE_OBJECT_METADATA_INTERVAL` (default `10s`)
 
 ## Security Considerations
 
@@ -74,6 +96,7 @@ Static assets:
 ## Operational Limitations (Current)
 
 - UI authentication is in-memory session-only (not distributed/session-store backed).
+- Token inventory/revocation state is in-memory (single-node process scope).
 - Upload progress enhancement uses XMLHttpRequest in-browser; no server-side resumable upload management in UI yet.
 - Object listing pagination currently supports forward continuation token navigation only.
 

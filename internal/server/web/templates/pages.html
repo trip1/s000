@@ -17,9 +17,39 @@
 
 {{define "pages/dashboard"}}
   {{template "layout_start" .}}
-  <article>
+  <article data-title="Dashboard">
     <h1>Dashboard</h1>
-    <p>Route map for HTML client scaffolding:</p>
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    <p>Bucket-level inventory and API request telemetry.</p>
+  </article>
+  <article>
+    <h2>Bucket inventory</h2>
+    <figure>
+      <table>
+        <thead><tr><th>Bucket</th><th>Objects</th><th>Total size (bytes)</th><th>Region</th><th>Versioning</th><th>Created</th></tr></thead>
+        <tbody>
+          {{if not .BucketSummaries}}
+            <tr><td colspan="6">No buckets found.</td></tr>
+          {{end}}
+          {{range .BucketSummaries}}
+            <tr>
+              <td><a href="/app/buckets/{{p .Name}}/objects">{{.Name}}</a></td>
+              <td>{{.ObjectCount}}</td>
+              <td>{{.TotalSizeBytes}}</td>
+              <td>{{.Region}}</td>
+              <td>{{.VersioningStatus}}</td>
+              <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </figure>
+  </article>
+  <div id="dashboard-stats" hx-ext="sse" sse-connect="/app/events/dashboard-stats" sse-swap="dashboard-stats">
+    {{template "partials/dashboard_api_stats" .}}
+  </div>
+  <article>
+    <h2>Route map</h2>
     <ul>
       {{range .RouteMap}}<li><code>{{.Path}}</code> - {{.Purpose}}</li>{{end}}
     </ul>
@@ -42,8 +72,9 @@
       <button type="submit">Create bucket</button>
     </form>
   </article>
-  <div hx-get="/app/partials/buckets" hx-trigger="load" hx-target="#bucket-table">Loading buckets...</div>
-  <div id="bucket-table"></div>
+  <div id="bucket-table" hx-ext="sse" sse-connect="/app/events/buckets" sse-swap="buckets-updated">
+    {{template "partials/buckets_table" .}}
+  </div>
   {{template "layout_end" .}}
 {{end}}
 
@@ -142,6 +173,10 @@
     <h1>Object Browser: {{.BucketName}}</h1>
     {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
     {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    <nav aria-label="Folder breadcrumbs">
+      <a href="/app/buckets/{{p .BucketName}}/objects?delimiter={{q .Delimiter}}">root</a>
+      {{range .Breadcrumbs}} / <a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .Prefix}}&delimiter={{q $.Delimiter}}">{{.Label}}</a>{{end}}
+    </nav>
   </article>
   <article>
     <form method="get" action="/app/buckets/{{p .BucketName}}/objects" aria-label="Object list filters">
@@ -158,17 +193,33 @@
     <form method="post" action="/app/actions/upload-object" enctype="multipart/form-data" data-upload-form aria-label="Upload object">
       <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
       <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="prefix" value="{{.Prefix}}">
+      <input type="hidden" name="delimiter" value="{{.Delimiter}}">
       <label for="upload-key">Object key</label>
-      <input id="upload-key" type="text" name="key" required>
+      <input id="upload-key" type="text" name="key" data-upload-key required>
       <label for="upload-file">File</label>
-      <input id="upload-file" type="file" name="file" required>
+      <input id="upload-file" type="file" name="file" data-upload-file required>
+      <button type="button" data-upload-prefill>Use current folder + filename</button>
+      <small>Current folder prefix: {{if .Prefix}}<code>{{.Prefix}}</code>{{else}}<code>(bucket root)</code>{{end}}</small>
       <button type="submit">Upload</button>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
       <p id="upload-status" role="status" aria-live="polite"></p>
     </form>
   </article>
-  <div hx-get="/app/partials/objects?bucket={{q .BucketName}}&prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .ContinuationToken}}" hx-trigger="load" hx-target="#object-table">Loading objects...</div>
-  <div id="object-table"></div>
+  <article>
+    <form method="post" action="/app/actions/create-folder" aria-label="Create folder">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="prefix" value="{{.Prefix}}">
+      <input type="hidden" name="delimiter" value="{{.Delimiter}}">
+      <label for="create-folder-name">Folder name</label>
+      <input id="create-folder-name" type="text" name="folder" placeholder="new-folder" required>
+      <button type="submit">Create folder</button>
+    </form>
+  </article>
+  <div id="object-table" hx-ext="sse" sse-connect="/app/events/objects?bucket={{q .BucketName}}&prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .ContinuationToken}}" sse-swap="objects-updated">
+    {{template "partials/objects_table" .}}
+  </div>
   {{template "layout_end" .}}
 {{end}}
 
@@ -184,8 +235,9 @@
       <input type="hidden" name="key" value="{{.ObjectKey}}">
       <button type="submit">Delete object</button>
     </form>
-    <div hx-get="/app/partials/object-metadata?bucket={{q .BucketName}}&key={{q .ObjectKey}}" hx-trigger="load" hx-target="#object-metadata">Loading metadata...</div>
-    <div id="object-metadata"></div>
+    <div id="object-metadata" hx-ext="sse" sse-connect="/app/events/object-metadata?bucket={{q .BucketName}}&key={{q .ObjectKey}}" sse-swap="object-metadata-updated">
+      {{template "partials/object_metadata" .}}
+    </div>
   </article>
   {{template "layout_end" .}}
 {{end}}
@@ -228,6 +280,33 @@
       <button type="submit">Apply theme</button>
     </form>
   </article>
+  {{template "layout_end" .}}
+{{end}}
+
+{{define "pages/tokens"}}
+  {{template "layout_start" .}}
+  <article data-title="Tokens">
+    <h1>Personal Access Tokens</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+    <p>Create short-lived bearer tokens for CLI uploads and automation.</p>
+  </article>
+  <article>
+    <form method="post" action="/app/actions/tokens/create" hx-post="/app/actions/tokens/create" hx-target="#token-create-result" hx-swap="innerHTML" aria-label="Create token">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <label for="token-label">Label</label>
+      <input id="token-label" type="text" name="label" placeholder="local shell">
+      <label for="token-subject">Subject</label>
+      <input id="token-subject" type="text" name="subject" value="cli" required>
+      <label for="token-ttl">TTL</label>
+      <input id="token-ttl" type="text" name="ttl" value="24h" required>
+      <button type="submit">Generate token</button>
+    </form>
+    <div id="token-create-result">{{if .GeneratedToken}}{{template "partials/token_create_result" .}}{{end}}</div>
+  </article>
+  <div id="tokens-table" hx-ext="sse" sse-connect="/app/events/tokens" sse-swap="tokens-updated">
+    {{template "partials/tokens_table" .}}
+  </div>
   {{template "layout_end" .}}
 {{end}}
 

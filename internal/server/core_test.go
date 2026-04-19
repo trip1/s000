@@ -7,6 +7,8 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -397,6 +399,185 @@ func TestMetricsEndpointExposesPrometheusText(t *testing.T) {
 	}
 	if !strings.Contains(body, "s000_worker_queue_depth") {
 		t.Fatalf("expected queue depth metric in body: %s", body)
+	}
+}
+
+func TestDashboardShowsBucketInventoryAndAPIStats(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	mstore, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:" + filepath.Join(root, "meta.db")})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	bstore, err := blob.NewStore(blob.Config{RootDir: root, FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC)
+	if err := mstore.CreateBucket(ctx, metadata.Bucket{Name: "photos", CreatedAt: now, Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	if err := mstore.PutObjectVersion(ctx, metadata.ObjectVersion{Bucket: "photos", Key: "img/a.jpg", VersionID: "null", Size: 512, ETag: "etag", ChecksumSHA256: "sha256", StoragePath: filepath.Join(root, "a.jpg"), CreatedAt: now}); err != nil {
+		t.Fatalf("put object version failed: %v", err)
+	}
+
+	collector := observability.NewCollector()
+	h := NewHandler(Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret", Metrics: collector})
+
+	loginForm := url.Values{"access_key": {"admin"}, "secret_key": {"secret"}}
+	loginReq := httptest.NewRequest(http.MethodPost, "/app/login", strings.NewReader(loginForm.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRR := httptest.NewRecorder()
+	h.ServeHTTP(loginRR, loginReq)
+	if loginRR.Code != http.StatusSeeOther {
+		t.Fatalf("expected login status %d, got %d", http.StatusSeeOther, loginRR.Code)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range loginRR.Result().Cookies() {
+		if c.Name == uiSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected session cookie after login")
+	}
+
+	dashboardReq := httptest.NewRequest(http.MethodGet, "/app", nil)
+	dashboardReq.AddCookie(sessionCookie)
+	dashboardRR := httptest.NewRecorder()
+	h.ServeHTTP(dashboardRR, dashboardReq)
+
+	if dashboardRR.Code != http.StatusOK {
+		t.Fatalf("expected dashboard status %d, got %d", http.StatusOK, dashboardRR.Code)
+	}
+	body := dashboardRR.Body.String()
+	if !strings.Contains(body, "Bucket inventory") {
+		t.Fatalf("expected bucket inventory section, got %q", body)
+	}
+	if !strings.Contains(body, "photos") || !strings.Contains(body, ">1<") || !strings.Contains(body, ">512<") {
+		t.Fatalf("expected bucket-level object totals in dashboard, got %q", body)
+	}
+	if !strings.Contains(body, "API request stats") {
+		t.Fatalf("expected API request stats section, got %q", body)
+	}
+	if !strings.Contains(body, "Total requests</dt><dd>1</dd>") {
+		t.Fatalf("expected request totals in dashboard, got %q", body)
+	}
+}
+
+func TestDashboardStatsSSEStreamsHTMXEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	mstore, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:" + filepath.Join(root, "meta.db")})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	bstore, err := blob.NewStore(blob.Config{RootDir: root, FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+	if err := mstore.CreateBucket(ctx, metadata.Bucket{Name: "ops", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	collector := observability.NewCollector()
+	collector.ObserveRequest(http.StatusNotFound, 12*time.Millisecond, 3, 9)
+	h := NewHandler(Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret", Metrics: collector})
+
+	loginForm := url.Values{"access_key": {"admin"}, "secret_key": {"secret"}}
+	loginReq := httptest.NewRequest(http.MethodPost, "/app/login", strings.NewReader(loginForm.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRR := httptest.NewRecorder()
+	h.ServeHTTP(loginRR, loginReq)
+
+	var sessionCookie *http.Cookie
+	for _, c := range loginRR.Result().Cookies() {
+		if c.Name == uiSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected session cookie after login")
+	}
+
+	streamCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	streamReq := httptest.NewRequest(http.MethodGet, "/app/events/dashboard-stats", nil).WithContext(streamCtx)
+	streamReq.AddCookie(sessionCookie)
+	streamRR := httptest.NewRecorder()
+	h.ServeHTTP(streamRR, streamReq)
+
+	if ct := streamRR.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q", ct)
+	}
+	body := streamRR.Body.String()
+	if !strings.Contains(body, "event: dashboard-stats") {
+		t.Fatalf("expected dashboard-stats event in stream, got %q", body)
+	}
+	if !strings.Contains(body, "P95 latency") || !strings.Contains(body, "4xx requests") {
+		t.Fatalf("expected stats fragment in SSE payload, got %q", body)
+	}
+}
+
+func TestBucketTableSSEStreamsHTMXEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	mstore, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:" + filepath.Join(root, "meta.db")})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	bstore, err := blob.NewStore(blob.Config{RootDir: root, FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+	if err := mstore.CreateBucket(ctx, metadata.Bucket{Name: "live-bucket", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	h := NewHandler(Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret"})
+
+	loginForm := url.Values{"access_key": {"admin"}, "secret_key": {"secret"}}
+	loginReq := httptest.NewRequest(http.MethodPost, "/app/login", strings.NewReader(loginForm.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRR := httptest.NewRecorder()
+	h.ServeHTTP(loginRR, loginReq)
+
+	var sessionCookie *http.Cookie
+	for _, c := range loginRR.Result().Cookies() {
+		if c.Name == uiSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected session cookie after login")
+	}
+
+	streamCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	streamReq := httptest.NewRequest(http.MethodGet, "/app/events/buckets", nil).WithContext(streamCtx)
+	streamReq.AddCookie(sessionCookie)
+	streamRR := httptest.NewRecorder()
+	h.ServeHTTP(streamRR, streamReq)
+
+	if ct := streamRR.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q", ct)
+	}
+	body := streamRR.Body.String()
+	if !strings.Contains(body, "event: buckets-updated") {
+		t.Fatalf("expected buckets-updated event in stream, got %q", body)
+	}
+	if !strings.Contains(body, "live-bucket") {
+		t.Fatalf("expected bucket table payload in stream, got %q", body)
 	}
 }
 

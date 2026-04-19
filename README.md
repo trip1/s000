@@ -9,6 +9,7 @@ Current status: Release 1 implementation is substantially complete, including AP
   - `export S000_ADMIN_ACCESS_KEY=admin`
   - `export S000_ADMIN_SECRET_KEY=secret`
 - Start local server: `go run ./cmd/s000`
+- Optional import from existing directories: `go run ./cmd/s000 --import-directory ./seed-data`
 - Validate service health: `go run ./cmd/s000ctl health-inspect --endpoint http://127.0.0.1:9000`
 - Open UI login: `http://127.0.0.1:9000/app/login`
 - Run unit tests: `make test`
@@ -36,6 +37,7 @@ The server currently exposes:
 Current core API behavior:
 - S3-style routes are wired for path-style and optional virtual-host style routing (`S000_DOMAIN`).
 - Non-health endpoints use SigV4 verification.
+- Personal access token authentication is also available via `Authorization: Bearer <token>` when PAT signing is configured.
 - Bucket APIs include create/list/delete (empty bucket), location, versioning, and ListObjectsV2.
 - Object APIs include put/get/head/delete, copy, range reads, user metadata headers, and checksum/ETag headers.
 - Multipart APIs include create/upload-part/list-parts/complete/abort and list multipart uploads.
@@ -46,12 +48,13 @@ Current core API behavior:
 Selected environment variables:
 - `S000_ADDR` (default `:9000`)
 - `S000_DOMAIN` (optional virtual-host suffix, example `s000.local`)
+- `S000_IMPORT_DIRECTORY` (optional path to import at startup; top-level folders become buckets)
 - `S000_MAX_INFLIGHT` (default `128`)
 - `S000_SHUTDOWN_TIMEOUT` (default `10s`)
 - `S000_AUTH_MAX_SKEW` (default `15m`)
 - `S000_ADMIN_ACCESS_KEY` + `S000_ADMIN_SECRET_KEY` (initial admin bootstrap credential)
 - `S000_METADATA_BACKEND` (default `sqlite`)
-- `S000_METADATA_DSN` (default `file:./data/s000-metadata.db`)
+- `S000_METADATA_DSN` (default follows `S000_DATA_DIR` as `file:<data-dir>/s000-metadata.db`; metadata catalog snapshots reload on startup for the selected backend)
 - `S000_VALKEY_ADDR` (default `127.0.0.1:6379`)
 - `S000_METADATA_CONNECT_TIMEOUT` (default `3s`)
 - `S000_LIFECYCLE_RULES` (optional lifecycle rules; format: `prefix=<prefix>,age=<duration>[;prefix=<prefix>,age=<duration>]`)
@@ -77,7 +80,13 @@ Selected environment variables:
 - `S000_AUTH_FAIL_THRESHOLD` (default `20`)
 - `S000_AUTH_FAIL_WINDOW` (default `1m`)
 - `S000_AUTH_BLOCK_DURATION` (default `5m`)
+- `S000_PAT_SIGNING_KEY` (optional PAT signing key; defaults to `S000_ADMIN_SECRET_KEY` when unset)
 - `S000_UI_THEME` (default `sysadmin90`; supported: `sysadmin90`)
+- `S000_UI_SSE_DASHBOARD_STATS_INTERVAL` (default `2s`; dashboard API stats refresh cadence)
+- `S000_UI_SSE_BUCKETS_INTERVAL` (default `10s`; buckets table refresh cadence)
+- `S000_UI_SSE_TOKENS_INTERVAL` (default `10s`; tokens table refresh cadence)
+- `S000_UI_SSE_OBJECTS_INTERVAL` (default `10s`; object list refresh cadence)
+- `S000_UI_SSE_OBJECT_METADATA_INTERVAL` (default `10s`; object metadata refresh cadence)
 - `S000_WEBSITE_ENABLED` (default `false`)
 - `S000_WEBSITE_ADDR` (default `:9001`)
 - `S000_WEBSITE_DOMAIN` (optional virtual-host suffix for website endpoint)

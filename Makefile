@@ -89,3 +89,6 @@ watch:
 		exit 1; \
 	}
 	env -u GOROOT -u GOTOOLDIR GOOS=linux GOARCH=amd64 air -c .air.toml
+
+deploy-local:
+	docker build -t ds9/s000:latest . && docker save ds9/s000:latest | gzip | ssh root@10.0.10.1 'gunzip | docker load'
