@@ -36,6 +36,84 @@ jobs:
       - name: Integration tests
         run: make integration
 
+  metadata-backend-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, libsql, postgresql, mariadb, valkey]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: s000
+          POSTGRES_PASSWORD: s000pass
+          POSTGRES_DB: s000
+        options: >-
+          --health-cmd "pg_isready -U s000 -d s000"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: rootpass
+          MARIADB_DATABASE: s000
+          MARIADB_USER: s000
+          MARIADB_PASSWORD: s000pass
+        options: >-
+          --health-cmd "mariadb-admin ping -h 127.0.0.1 -u root -prootpass"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+        ports:
+          - 3306:3306
+      valkey:
+        image: valkey/valkey:7
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: Backend connection integration tests
+        env:
+          S000_TEST_POSTGRES_DSN: postgres://s000:s000pass@127.0.0.1:5432/s000?sslmode=disable
+          S000_TEST_MARIADB_DSN: s000:s000pass@tcp(127.0.0.1:3306)/s000?parseTime=true
+          S000_TEST_VALKEY_ADDR: 127.0.0.1:6379
+          S000_TEST_VALKEY_DSN: redis://127.0.0.1:6379/0
+          S000_TEST_LIBSQL_DSN: file:${{ runner.temp }}/libsql-meta.db
+        run: |
+          case "${{ matrix.backend }}" in
+            sqlite)
+              go test -tags=integration ./internal/metadata -run TestOpenConnectionsSQLiteIntegration
+              ;;
+            libsql)
+              go test -tags=integration ./internal/metadata -run TestOpenConnectionsLibSQLIntegration
+              ;;
+            postgresql)
+              go test -tags=integration ./internal/metadata -run TestOpenConnectionsPostgreSQLIntegration
+              ;;
+            mariadb)
+              go test -tags=integration ./internal/metadata -run TestOpenConnectionsMariaDBIntegration
+              ;;
+            valkey)
+              go test -tags=integration ./internal/metadata -run TestOpenConnectionsValkeyIntegration
+              ;;
+            *)
+              echo "unsupported backend matrix entry: ${{ matrix.backend }}" >&2
+              exit 1
+              ;;
+          esac
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -53,6 +131,46 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./cmd/s000
+
+  docker-image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   artifacts:
     runs-on: ubuntu-latest
