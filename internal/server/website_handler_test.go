@@ -78,6 +78,66 @@ func TestWebsiteHandlerRedirectAllRequests(t *testing.T) {
 	}
 }
 
+func TestWebsiteHandlerRoutingRulePrefixRedirect(t *testing.T) {
+	t.Parallel()
+
+	_, store := newWebsiteFixture(t)
+	if err := store.PutBucketWebsite(context.Background(), metadata.BucketWebsiteConfig{
+		Bucket:        "site",
+		IndexDocument: "index.html",
+		Enabled:       true,
+		PublicRead:    true,
+		RoutingRules: []metadata.BucketWebsiteRoutingRule{{
+			Condition: metadata.BucketWebsiteRoutingCondition{KeyPrefixEquals: "docs/"},
+			Redirect:  metadata.BucketWebsiteRedirect{ReplaceKeyPrefixWith: "documents/", HTTPRedirectCode: "302"},
+		}},
+	}); err != nil {
+		t.Fatalf("put website config with routing rules failed: %v", err)
+	}
+
+	h := NewWebsiteHandler(store, mustBlob(t), "website.local")
+	req := httptest.NewRequest(http.MethodGet, "http://site.website.local/docs/setup.html?lang=en", nil)
+	req.Host = "site.website.local"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("expected redirect status 302, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "/documents/setup.html?lang=en") {
+		t.Fatalf("unexpected redirect location %q", loc)
+	}
+}
+
+func TestWebsiteHandlerRoutingRule404Redirect(t *testing.T) {
+	t.Parallel()
+
+	_, store := newWebsiteFixture(t)
+	if err := store.PutBucketWebsite(context.Background(), metadata.BucketWebsiteConfig{
+		Bucket:        "site",
+		IndexDocument: "index.html",
+		Enabled:       true,
+		PublicRead:    true,
+		RoutingRules: []metadata.BucketWebsiteRoutingRule{{
+			Condition: metadata.BucketWebsiteRoutingCondition{HttpErrorCodeReturnedEquals: "404"},
+			Redirect:  metadata.BucketWebsiteRedirect{HostName: "example.com", Protocol: "https", ReplaceKeyWith: "not-found.html"},
+		}},
+	}); err != nil {
+		t.Fatalf("put website config with 404 routing rule failed: %v", err)
+	}
+
+	h := NewWebsiteHandler(store, mustBlob(t), "website.local")
+	req := httptest.NewRequest(http.MethodGet, "http://site.website.local/missing?from=app", nil)
+	req.Host = "site.website.local"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusMovedPermanently {
+		t.Fatalf("expected redirect status 301, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "https://example.com/not-found.html?from=app" {
+		t.Fatalf("unexpected redirect location %q", loc)
+	}
+}
+
 func newWebsiteFixture(t *testing.T) (http.Handler, metadata.Store) {
 	t.Helper()
 	ctx := context.Background()

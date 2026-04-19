@@ -115,6 +115,19 @@ func (a *s3API) handlePutBucketWebsite(w http.ResponseWriter, r *http.Request, b
 			HostName string `xml:"HostName"`
 			Protocol string `xml:"Protocol"`
 		} `xml:"RedirectAllRequestsTo"`
+		RoutingRules []struct {
+			Condition struct {
+				KeyPrefixEquals             string `xml:"KeyPrefixEquals"`
+				HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals"`
+			} `xml:"Condition"`
+			Redirect struct {
+				HostName             string `xml:"HostName"`
+				Protocol             string `xml:"Protocol"`
+				ReplaceKeyPrefixWith string `xml:"ReplaceKeyPrefixWith"`
+				ReplaceKeyWith       string `xml:"ReplaceKeyWith"`
+				HTTPRedirectCode     string `xml:"HttpRedirectCode"`
+			} `xml:"Redirect"`
+		} `xml:"RoutingRules>RoutingRule"`
 	}
 	var in websiteXML
 	if err := xml.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -125,13 +138,34 @@ func (a *s3API) handlePutBucketWebsite(w http.ResponseWriter, r *http.Request, b
 	errDoc := strings.TrimSpace(in.Error.Key)
 	redirectHost := strings.TrimSpace(in.Redirect.HostName)
 	redirectProto := strings.TrimSpace(strings.ToLower(in.Redirect.Protocol))
-	if idx == "" && redirectHost == "" {
+	if idx == "" && redirectHost == "" && len(in.RoutingRules) == 0 {
 		writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusBadRequest, Code: "InvalidRequest", Message: "Website configuration requires IndexDocument or RedirectAllRequestsTo.", Resource: "/" + bucket})
 		return
 	}
 	if redirectProto != "" && redirectProto != "http" && redirectProto != "https" {
 		writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusBadRequest, Code: "InvalidRequest", Message: "Redirect protocol must be http or https.", Resource: "/" + bucket})
 		return
+	}
+	routingRules := make([]metadata.BucketWebsiteRoutingRule, 0, len(in.RoutingRules))
+	for _, rr := range in.RoutingRules {
+		rule := metadata.BucketWebsiteRoutingRule{
+			Condition: metadata.BucketWebsiteRoutingCondition{
+				KeyPrefixEquals:             strings.TrimSpace(rr.Condition.KeyPrefixEquals),
+				HttpErrorCodeReturnedEquals: strings.TrimSpace(rr.Condition.HTTPErrorCodeReturnedEquals),
+			},
+			Redirect: metadata.BucketWebsiteRedirect{
+				HostName:             strings.TrimSpace(rr.Redirect.HostName),
+				Protocol:             strings.TrimSpace(strings.ToLower(rr.Redirect.Protocol)),
+				ReplaceKeyPrefixWith: strings.TrimSpace(rr.Redirect.ReplaceKeyPrefixWith),
+				ReplaceKeyWith:       strings.TrimSpace(rr.Redirect.ReplaceKeyWith),
+				HTTPRedirectCode:     strings.TrimSpace(rr.Redirect.HTTPRedirectCode),
+			},
+		}
+		if err := validateWebsiteRoutingRule(rule); err != nil {
+			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusBadRequest, Code: "InvalidRequest", Message: err.Error(), Resource: "/" + bucket})
+			return
+		}
+		routingRules = append(routingRules, rule)
 	}
 
 	if err := a.store.PutBucketWebsite(r.Context(), metadata.BucketWebsiteConfig{
@@ -140,6 +174,7 @@ func (a *s3API) handlePutBucketWebsite(w http.ResponseWriter, r *http.Request, b
 		ErrorDocument:       errDoc,
 		RedirectAllHost:     redirectHost,
 		RedirectAllProtocol: redirectProto,
+		RoutingRules:        routingRules,
 		Enabled:             true,
 		PublicRead:          true,
 	}); err != nil {
@@ -176,6 +211,21 @@ func (a *s3API) handleGetBucketWebsite(w http.ResponseWriter, r *http.Request, b
 			HostName string `xml:"HostName"`
 			Protocol string `xml:"Protocol,omitempty"`
 		} `xml:"RedirectAllRequestsTo,omitempty"`
+		RoutingRules *struct {
+			Rules []struct {
+				Condition *struct {
+					KeyPrefixEquals             string `xml:"KeyPrefixEquals,omitempty"`
+					HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals,omitempty"`
+				} `xml:"Condition,omitempty"`
+				Redirect struct {
+					HostName             string `xml:"HostName,omitempty"`
+					Protocol             string `xml:"Protocol,omitempty"`
+					ReplaceKeyPrefixWith string `xml:"ReplaceKeyPrefixWith,omitempty"`
+					ReplaceKeyWith       string `xml:"ReplaceKeyWith,omitempty"`
+					HTTPRedirectCode     string `xml:"HttpRedirectCode,omitempty"`
+				} `xml:"Redirect"`
+			} `xml:"RoutingRule"`
+		} `xml:"RoutingRules,omitempty"`
 	}
 	out := outXML{}
 	if cfg.IndexDocument != "" {
@@ -194,7 +244,92 @@ func (a *s3API) handleGetBucketWebsite(w http.ResponseWriter, r *http.Request, b
 			Protocol string `xml:"Protocol,omitempty"`
 		}{HostName: cfg.RedirectAllHost, Protocol: cfg.RedirectAllProtocol}
 	}
+	if len(cfg.RoutingRules) > 0 {
+		rules := make([]struct {
+			Condition *struct {
+				KeyPrefixEquals             string `xml:"KeyPrefixEquals,omitempty"`
+				HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals,omitempty"`
+			} `xml:"Condition,omitempty"`
+			Redirect struct {
+				HostName             string `xml:"HostName,omitempty"`
+				Protocol             string `xml:"Protocol,omitempty"`
+				ReplaceKeyPrefixWith string `xml:"ReplaceKeyPrefixWith,omitempty"`
+				ReplaceKeyWith       string `xml:"ReplaceKeyWith,omitempty"`
+				HTTPRedirectCode     string `xml:"HttpRedirectCode,omitempty"`
+			} `xml:"Redirect"`
+		}, 0, len(cfg.RoutingRules))
+		for _, rr := range cfg.RoutingRules {
+			item := struct {
+				Condition *struct {
+					KeyPrefixEquals             string `xml:"KeyPrefixEquals,omitempty"`
+					HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals,omitempty"`
+				} `xml:"Condition,omitempty"`
+				Redirect struct {
+					HostName             string `xml:"HostName,omitempty"`
+					Protocol             string `xml:"Protocol,omitempty"`
+					ReplaceKeyPrefixWith string `xml:"ReplaceKeyPrefixWith,omitempty"`
+					ReplaceKeyWith       string `xml:"ReplaceKeyWith,omitempty"`
+					HTTPRedirectCode     string `xml:"HttpRedirectCode,omitempty"`
+				} `xml:"Redirect"`
+			}{}
+			if rr.Condition.KeyPrefixEquals != "" || rr.Condition.HttpErrorCodeReturnedEquals != "" {
+				item.Condition = &struct {
+					KeyPrefixEquals             string `xml:"KeyPrefixEquals,omitempty"`
+					HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals,omitempty"`
+				}{
+					KeyPrefixEquals:             rr.Condition.KeyPrefixEquals,
+					HTTPErrorCodeReturnedEquals: rr.Condition.HttpErrorCodeReturnedEquals,
+				}
+			}
+			item.Redirect.HostName = rr.Redirect.HostName
+			item.Redirect.Protocol = rr.Redirect.Protocol
+			item.Redirect.ReplaceKeyPrefixWith = rr.Redirect.ReplaceKeyPrefixWith
+			item.Redirect.ReplaceKeyWith = rr.Redirect.ReplaceKeyWith
+			item.Redirect.HTTPRedirectCode = rr.Redirect.HTTPRedirectCode
+			rules = append(rules, item)
+		}
+		out.RoutingRules = &struct {
+			Rules []struct {
+				Condition *struct {
+					KeyPrefixEquals             string `xml:"KeyPrefixEquals,omitempty"`
+					HTTPErrorCodeReturnedEquals string `xml:"HttpErrorCodeReturnedEquals,omitempty"`
+				} `xml:"Condition,omitempty"`
+				Redirect struct {
+					HostName             string `xml:"HostName,omitempty"`
+					Protocol             string `xml:"Protocol,omitempty"`
+					ReplaceKeyPrefixWith string `xml:"ReplaceKeyPrefixWith,omitempty"`
+					ReplaceKeyWith       string `xml:"ReplaceKeyWith,omitempty"`
+					HTTPRedirectCode     string `xml:"HttpRedirectCode,omitempty"`
+				} `xml:"Redirect"`
+			} `xml:"RoutingRule"`
+		}{Rules: rules}
+	}
 	writeXML(w, http.StatusOK, out)
+}
+
+func validateWebsiteRoutingRule(rule metadata.BucketWebsiteRoutingRule) error {
+	if rule.Redirect.Protocol != "" && rule.Redirect.Protocol != "http" && rule.Redirect.Protocol != "https" {
+		return fmt.Errorf("routing rule redirect protocol must be http or https")
+	}
+	if rule.Redirect.ReplaceKeyPrefixWith != "" && rule.Redirect.ReplaceKeyWith != "" {
+		return fmt.Errorf("routing rule redirect cannot set both ReplaceKeyPrefixWith and ReplaceKeyWith")
+	}
+	if rule.Redirect.HostName == "" && rule.Redirect.Protocol == "" && rule.Redirect.ReplaceKeyPrefixWith == "" && rule.Redirect.ReplaceKeyWith == "" && rule.Redirect.HTTPRedirectCode == "" {
+		return fmt.Errorf("routing rule redirect requires at least one redirect field")
+	}
+	if rule.Condition.HttpErrorCodeReturnedEquals != "" {
+		n, err := strconv.Atoi(rule.Condition.HttpErrorCodeReturnedEquals)
+		if err != nil || n < 100 || n > 599 {
+			return fmt.Errorf("routing rule condition HttpErrorCodeReturnedEquals must be a valid HTTP status code")
+		}
+	}
+	if rule.Redirect.HTTPRedirectCode != "" {
+		n, err := strconv.Atoi(rule.Redirect.HTTPRedirectCode)
+		if err != nil || n < 300 || n > 399 {
+			return fmt.Errorf("routing rule HttpRedirectCode must be a valid 3xx status code")
+		}
+	}
+	return nil
 }
 
 func (a *s3API) handleDeleteBucketWebsite(w http.ResponseWriter, r *http.Request, bucket string) {

@@ -59,8 +59,30 @@ type BucketWebsiteConfig struct {
 	ErrorDocument       string
 	RedirectAllHost     string
 	RedirectAllProtocol string
+	RoutingRules        []BucketWebsiteRoutingRule
 	Enabled             bool
 	PublicRead          bool
+}
+
+// BucketWebsiteRoutingRule stores one website routing rule condition + redirect action.
+type BucketWebsiteRoutingRule struct {
+	Condition BucketWebsiteRoutingCondition
+	Redirect  BucketWebsiteRedirect
+}
+
+// BucketWebsiteRoutingCondition stores website rule matching criteria.
+type BucketWebsiteRoutingCondition struct {
+	KeyPrefixEquals             string
+	HttpErrorCodeReturnedEquals string
+}
+
+// BucketWebsiteRedirect stores website redirect behavior for one rule.
+type BucketWebsiteRedirect struct {
+	HostName             string
+	Protocol             string
+	ReplaceKeyPrefixWith string
+	ReplaceKeyWith       string
+	HTTPRedirectCode     string
 }
 
 // BucketCORSConfig stores per-bucket CORS settings.

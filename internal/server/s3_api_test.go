@@ -569,7 +569,7 @@ func TestBucketWebsiteConfigurationLifecycle(t *testing.T) {
 		t.Fatal("failed to create bucket")
 	}
 
-	putBody := `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument><ErrorDocument><Key>error.html</Key></ErrorDocument></WebsiteConfiguration>`
+	putBody := `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument><ErrorDocument><Key>error.html</Key></ErrorDocument><RoutingRules><RoutingRule><Condition><KeyPrefixEquals>docs/</KeyPrefixEquals></Condition><Redirect><ReplaceKeyPrefixWith>documents/</ReplaceKeyPrefixWith><HttpRedirectCode>302</HttpRedirectCode></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`
 	put := execute(t, h, http.MethodPut, "/site?website", putBody)
 	if put.StatusCode != http.StatusOK {
 		t.Fatalf("expected put website status 200, got %d body=%s", put.StatusCode, readBody(t, put))
@@ -580,7 +580,7 @@ func TestBucketWebsiteConfigurationLifecycle(t *testing.T) {
 		t.Fatalf("expected get website status 200, got %d body=%s", get.StatusCode, readBody(t, get))
 	}
 	body := readBody(t, get)
-	if !strings.Contains(body, "<Suffix>index.html</Suffix>") || !strings.Contains(body, "<Key>error.html</Key>") {
+	if !strings.Contains(body, "<Suffix>index.html</Suffix>") || !strings.Contains(body, "<Key>error.html</Key>") || !strings.Contains(body, "<RoutingRules>") || !strings.Contains(body, "<ReplaceKeyPrefixWith>documents/</ReplaceKeyPrefixWith>") {
 		t.Fatalf("expected website xml payload, got %s", body)
 	}
 
@@ -595,6 +595,25 @@ func TestBucketWebsiteConfigurationLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(readBody(t, after), "NoSuchWebsiteConfiguration") {
 		t.Fatalf("expected NoSuchWebsiteConfiguration after delete, got %s", readBody(t, after))
+	}
+}
+
+func TestPutBucketWebsiteRejectsConflictingReplaceKeyFields(t *testing.T) {
+	t.Parallel()
+
+	h := newS3TestHandler(t)
+	if execute(t, h, http.MethodPut, "/site", "").StatusCode != http.StatusOK {
+		t.Fatal("failed to create bucket")
+	}
+
+	putBody := `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument><RoutingRules><RoutingRule><Redirect><ReplaceKeyPrefixWith>docs/</ReplaceKeyPrefixWith><ReplaceKeyWith>index.html</ReplaceKeyWith></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`
+	resp := execute(t, h, http.MethodPut, "/site?website", putBody)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected put website status 400, got %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "InvalidRequest") {
+		t.Fatalf("expected InvalidRequest body, got %s", body)
 	}
 }
 

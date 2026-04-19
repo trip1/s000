@@ -10,11 +10,11 @@ Current behavior targets a practical baseline for static site hosting:
 - Anonymous website reads (`GET`/`HEAD`) on a dedicated website endpoint.
 - Index and error document support.
 - Bucket-level redirect-all support (`RedirectAllRequestsTo`).
+- Website routing rules support (`RoutingRules`) with key-prefix and HTTP-error conditions.
 - Virtual-host bucket resolution with path-style fallback for local development.
 
 Out of scope for this MVP:
 
-- Advanced website routing rules.
 - Full parity coverage for all AWS website edge cases.
 - Native single-page application fallback toggle (can be approximated by setting `error_document` to `index.html`).
 
@@ -80,3 +80,22 @@ When `RedirectAllRequestsTo` is set, website requests return `301 Moved Permanen
 - configured host,
 - configured protocol (`http` or `https`, otherwise inferred from request TLS),
 - original request path and query string.
+
+## Routing Rules
+
+Routing rules are evaluated in order and the first matching rule wins.
+
+- Supported condition fields:
+  - `KeyPrefixEquals`
+  - `HttpErrorCodeReturnedEquals` (for example `404`)
+- Supported redirect fields:
+  - `HostName`
+  - `Protocol`
+  - `ReplaceKeyPrefixWith`
+  - `ReplaceKeyWith`
+  - `HttpRedirectCode`
+
+Notes:
+
+- `ReplaceKeyPrefixWith` and `ReplaceKeyWith` are mutually exclusive.
+- If `HttpRedirectCode` is omitted, redirects default to `301`.

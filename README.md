@@ -43,7 +43,7 @@ Current core API behavior:
 - Multipart APIs include create/upload-part/list-parts/complete/abort and list multipart uploads.
 - Metadata backend selection is wired (`S000_METADATA_BACKEND`) with compatibility-layer adapters for `sqlite`, `libsql`, `postgresql`, `mariadb`, and `valkey`.
 - Embedded web client is available at `/app/*` with a configurable UI theme.
-- Website endpoint support is available via `S000_WEBSITE_ENABLED` and `S000_WEBSITE_DOMAIN`.
+- Website endpoint support is available via `S000_WEBSITE_ENABLED` and `S000_WEBSITE_DOMAIN` with index/error documents, redirect-all, and routing rules.
 
 Selected environment variables:
 - `S000_ADDR` (default `:9000`)
