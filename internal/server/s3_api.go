@@ -8,14 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"ds9labs.com/s000/internal/blob"
-	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/metadata"
 )
 
@@ -27,7 +25,6 @@ type s3API struct {
 	heavy        *heavyOpLimiter
 	auditEnabled bool
 	audit        AuditSink
-	functions    *functions.Manager
 }
 
 func newS3API(opts Options) *s3API {
@@ -43,7 +40,6 @@ func newS3API(opts Options) *s3API {
 		heavy:        newHeavyOpLimiter(opts.HeavyOpsWorkers, opts.HeavyOpsQueue, opts.Metrics.SetWorkerQueueDepth),
 		auditEnabled: opts.AuditEnabled,
 		audit:        opts.Audit,
-		functions:    opts.Functions,
 	}
 }
 
@@ -445,26 +441,6 @@ func (a *s3API) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buck
 
 func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if !a.runHeavy(w, r, bucket, key, func() {
-		if a.functions != nil && a.functions.Enabled() {
-			preResult, err := a.functions.TriggerS3(r.Context(), functions.TriggerPutObjectPre, functions.S3Event{
-				Operation: "PutObject",
-				Phase:     "pre",
-				Bucket:    bucket,
-				Key:       key,
-				Size:      r.ContentLength,
-				Method:    r.Method,
-				RequestID: RequestIDFromContext(r.Context()),
-			})
-			if err != nil {
-				writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "Function pre-hook failed.", Resource: "/" + bucket + "/" + key})
-				return
-			}
-			if !preResult.Continue {
-				writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusForbidden, Code: "AccessDenied", Message: "PutObject blocked by function pre-hook.", Resource: "/" + bucket + "/" + key})
-				return
-			}
-		}
-
 		b, err := a.store.GetBucket(r.Context(), bucket)
 		if err != nil {
 			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusNotFound, Code: "NoSuchBucket", Message: "The specified bucket does not exist.", Resource: "/" + bucket})
@@ -514,19 +490,6 @@ func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, 
 
 		w.Header().Set("ETag", quotedETag(blobMeta.MD5Hex))
 		w.Header().Set("x-amz-checksum-sha256", blobMeta.SHA256)
-		if a.functions != nil && a.functions.Enabled() {
-			if _, err := a.functions.TriggerS3(r.Context(), functions.TriggerPutObjectPost, functions.S3Event{
-				Operation: "PutObject",
-				Phase:     "post",
-				Bucket:    bucket,
-				Key:       key,
-				Size:      blobMeta.Size,
-				Method:    r.Method,
-				RequestID: RequestIDFromContext(r.Context()),
-			}); err != nil {
-				slog.Warn("functions post-hook failed", "bucket", bucket, "key", key, "error", err)
-			}
-		}
 		w.WriteHeader(http.StatusOK)
 	}) {
 		return

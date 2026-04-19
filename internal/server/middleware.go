@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"ds9labs.com/s000/internal/auth"
-	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/observability"
 )
 
@@ -20,48 +19,10 @@ func withMiddleware(next http.Handler, opts Options) http.Handler {
 	h = withRateLimit(h, opts)
 	h = withAuthGate(h, opts)
 	h = withRequestID(h)
-	h = withFunctionHTTPHooks(h, opts)
 	h = withTracing(h, opts)
 	h = withRecovery(h)
 	h = withRequestLog(h, opts)
 	return h
-}
-
-func withFunctionHTTPHooks(next http.Handler, opts Options) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mgr := opts.Functions
-		if mgr == nil || !mgr.Enabled() || shouldBypassFunctionHooks(r.URL.Path, opts.MetricsPath) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		pre, err := mgr.TriggerHTTP(r.Context(), functions.TriggerHTTPPre, functions.HTTPEvent{
-			Phase:     "pre",
-			Method:    r.Method,
-			Path:      r.URL.Path,
-			RequestID: RequestIDFromContext(r.Context()),
-		})
-		if err != nil {
-			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "Function HTTP pre-hook failed.", Resource: r.URL.Path})
-			return
-		}
-		if !pre.Continue {
-			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusForbidden, Code: "AccessDenied", Message: "Request blocked by function HTTP pre-hook.", Resource: r.URL.Path})
-			return
-		}
-
-		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rw, r)
-		if _, err := mgr.TriggerHTTP(r.Context(), functions.TriggerHTTPPost, functions.HTTPEvent{
-			Phase:     "post",
-			Method:    r.Method,
-			Path:      r.URL.Path,
-			Status:    rw.status,
-			RequestID: RequestIDFromContext(r.Context()),
-		}); err != nil {
-			slog.Warn("functions http post-hook failed", "path", r.URL.Path, "error", err)
-		}
-	})
 }
 
 func withRequestLog(next http.Handler, opts Options) http.Handler {
@@ -136,7 +97,7 @@ func withRecovery(next http.Handler) http.Handler {
 
 func withAuthGate(next http.Handler, opts Options) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if shouldBypassAuth(r.URL.Path, opts.MetricsPath, opts.FunctionsHTTPPublic) {
+		if shouldBypassAuth(r.URL.Path, opts.MetricsPath) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -252,6 +213,9 @@ func withRequestID(next http.Handler) http.Handler {
 		}
 
 		ctx := withRequestIDContext(r.Context(), requestID)
+		if trace, ok := observability.ParseTraceparentHeader(r.Header.Get("Traceparent")); ok {
+			ctx = observability.WithTraceContext(ctx, trace)
+		}
 		r = r.WithContext(ctx)
 		w.Header().Set("X-Amz-Request-Id", requestID)
 		next.ServeHTTP(w, r)
@@ -309,24 +273,8 @@ func shouldBypassGuards(path string, metricsPath string) bool {
 	return false
 }
 
-func shouldBypassAuth(path string, metricsPath string, functionsHTTPPublic bool) bool {
+func shouldBypassAuth(path string, metricsPath string) bool {
 	if shouldBypassGuards(path, metricsPath) {
-		return true
-	}
-	if functionsHTTPPublic && strings.HasPrefix(path, "/fn/") {
-		return true
-	}
-	return false
-}
-
-func shouldBypassFunctionHooks(path string, metricsPath string) bool {
-	if shouldBypassGuards(path, metricsPath) {
-		return true
-	}
-	if strings.HasPrefix(path, "/functions") {
-		return true
-	}
-	if strings.HasPrefix(path, "/fn/") {
 		return true
 	}
 	return false

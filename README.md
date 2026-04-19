@@ -42,14 +42,6 @@ Current core API behavior:
 - Metadata backend selection is wired (`S000_METADATA_BACKEND`) with compatibility-layer adapters for `sqlite`, `libsql`, `postgresql`, `mariadb`, and `valkey`.
 - Embedded web client is available at `/app/*` with a configurable UI theme.
 - Website endpoint support is available via `S000_WEBSITE_ENABLED` and `S000_WEBSITE_DOMAIN`.
-- WASM function hooks are available for S3 and HTTP events with versioning, priorities, hot reload, metrics, alerts, and logs.
-
-Functions runtime abilities:
-- Runtime options: `wazero` (default, pure Go) and `wasmer` (optional external runtime).
-- Trigger support: `onPutObjectPre`, `onPutObjectPost`, `onHTTPPre`, `onHTTPPost`, `onCronTick`.
-- Deterministic dispatch: `priority` ascending, then name ascending, with short-circuit support via `{"continue":false}`.
-- Version lifecycle: immutable versions per function with explicit activate/rollback.
-- Ops controls: per-function rate limit, max concurrent, daily quota, alert thresholds.
 
 Selected environment variables:
 - `S000_ADDR` (default `:9000`)
@@ -89,26 +81,6 @@ Selected environment variables:
 - `S000_WEBSITE_ENABLED` (default `false`)
 - `S000_WEBSITE_ADDR` (default `:9001`)
 - `S000_WEBSITE_DOMAIN` (optional virtual-host suffix for website endpoint)
-- `S000_FUNCTIONS_ENABLED` (default `false`)
-- `S000_FUNCTIONS_DIR` (default `./functions`)
-- `S000_FUNCTIONS_RUNTIME` (default `wazero`; supported: `wazero`, `wasmer`)
-- `S000_FUNCTIONS_MEMORY_LIMIT` (default `64`, in MB)
-- `S000_FUNCTIONS_CPU_LIMIT` (default `100ms`)
-- `S000_FUNCTIONS_NETWORK_ALLOW` (default `true`)
-- `S000_FUNCTIONS_FS_ALLOW` (default `false`)
-- `S000_FUNCTIONS_HOT_RELOAD` (default `false`)
-- `S000_FUNCTIONS_HTTP_PUBLIC` (default `false`; when `true`, `/fn/*` is publicly invokable without SigV4)
-- `S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN` (default empty/disabled; set `*` or comma-separated origins)
-- `S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS` (default `GET, POST, PUT, PATCH, DELETE, OPTIONS`)
-- `S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS` (default `Content-Type, Authorization`)
-- `S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS` (default empty)
-- `S000_FUNCTIONS_HTTP_CORS_MAX_AGE` (default `600` seconds)
-- `S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS` (default `false`)
-- `S000_FUNCTIONS_RELOAD_INTERVAL` (default `2s`)
-- `S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE` (default `0` = disabled)
-- `S000_FUNCTIONS_MAX_CONCURRENT` (default `0` = disabled)
-- `S000_FUNCTIONS_DAILY_QUOTA` (default `0` = disabled)
-- `S000_FUNCTIONS_ALERT_ERROR_COUNT_THRESHOLD` (default `10`)
 
 ## Debug Endpoints
 
@@ -120,64 +92,6 @@ When lifecycle rules are configured, authenticated admin/debug endpoints are ava
   - Returns cumulative lifecycle run counters (`runs`, scanned/eligible/deleted/failed totals, and last-run info).
 
 If the lifecycle worker is not configured, these endpoints return `503` with a JSON error payload.
-
-## Functions API (Phase 1)
-
-When `S000_FUNCTIONS_ENABLED=true`, authenticated function management endpoints are available:
-
-- `GET /functions` - list registered functions.
-- `POST /functions` - create a function.
-- `GET /functions/{name}` - get function metadata.
-- `PUT /functions/{name}` - update function metadata/module.
-- `DELETE /functions/{name}` - delete a function.
-- `GET /functions/{name}/versions` - list immutable versions.
-- `POST /functions/{name}/activate` - switch active version (`{"version":N}`).
-- `POST /functions/{name}/invoke` - invoke one function locally for testing.
-- `GET /functions/templates` - list built-in function templates.
-- `GET /functions/metrics` - function invocation metrics.
-- `GET /functions/alerts` - current function alerts.
-- `GET /functions/logs` - recent function logs (`?limit=50`).
-
-Optional function HTTP gateway:
-
-- `ANY /fn/{name}[/{path...}]` - invoke a function using browser/native HTTP methods and map function output to HTTP response.
-- By default this route still requires SigV4 auth; set `S000_FUNCTIONS_HTTP_PUBLIC=true` to allow unsigned public access.
-- Set CORS env vars above to support cross-origin browser calls to `/fn/*`.
-
-Function payload fields:
-
-- `name` (string)
-- `runtime` (`wazero` default, or `wasmer`)
-- `trigger` (`onPutObjectPre`, `onPutObjectPost`, `onHTTPPre`, `onHTTPPost`, `onCronTick`)
-- `priority` (int, lower runs first; default `100`)
-- `enabled` (bool)
-- `module_base64` (base64-encoded wasm module bytes)
-
-Dispatch ordering/guarantees:
-
-- Deterministic order: `priority` ascending, then function name ascending.
-- Dispatch is sequential per trigger event.
-- If a function returns `{"continue":false}`, dispatch short-circuits and remaining functions are skipped.
-
-Hot reload manifest mode (`S000_FUNCTIONS_HOT_RELOAD=true`):
-
-- Place `*.json` manifest files in `S000_FUNCTIONS_DIR`.
-- Manifest fields: `name`, `runtime`, `trigger`, `enabled`, and either `module_path` or `module_base64`.
-- Changed manifests/modules create a new function version automatically.
-
-CLI function management (`s000ctl`):
-
-- `s000ctl functions-list --endpoint http://127.0.0.1:9000`
-- `s000ctl functions-create --endpoint http://127.0.0.1:9000 --name fn --trigger onPutObjectPre --module ./fn.wasm`
-- `s000ctl functions-get --endpoint http://127.0.0.1:9000 --name fn`
-- `s000ctl functions-delete --endpoint http://127.0.0.1:9000 --name fn`
-- `s000ctl functions-invoke --endpoint http://127.0.0.1:9000 --name fn --payload '{"bucket":"photos"}'`
-- `s000ctl functions-templates --endpoint http://127.0.0.1:9000`
-- `s000ctl functions-metrics --endpoint http://127.0.0.1:9000`
-- `s000ctl functions-alerts --endpoint http://127.0.0.1:9000`
-- `s000ctl functions-logs --endpoint http://127.0.0.1:9000 --limit 50`
-
-Production hardening guidance for functions runtime is in `docs/functions-production-hardening.md`.
 
 ## Metrics Endpoint
 

@@ -40,26 +40,6 @@ const (
 	defaultUITheme                           = "sysadmin90"
 	defaultWebsiteEnabled                    = false
 	defaultWebsiteAddr                       = ":9001"
-	defaultFunctionsEnabled                  = false
-	defaultFunctionsDir                      = "./functions"
-	defaultFunctionsRuntime                  = "wazero"
-	defaultFunctionsMemoryLimit              = 64
-	defaultFunctionsCPULimit                 = 100 * time.Millisecond
-	defaultFunctionsNetworkAllow             = true
-	defaultFunctionsFSAllow                  = false
-	defaultFunctionsHotReload                = false
-	defaultFunctionsHTTPPublic               = false
-	defaultFunctionsHTTPCORSAllowOrigin      = ""
-	defaultFunctionsHTTPCORSAllowMethods     = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-	defaultFunctionsHTTPCORSAllowHeaders     = "Content-Type, Authorization"
-	defaultFunctionsHTTPCORSExposeHeaders    = ""
-	defaultFunctionsHTTPCORSMaxAge           = 600
-	defaultFunctionsHTTPCORSAllowCredentials = false
-	defaultFunctionsReloadInterval           = 2 * time.Second
-	defaultFunctionsRateLimitPerMinute       = 0
-	defaultFunctionsMaxConcurrent            = 0
-	defaultFunctionsDailyQuota               = 0
-	defaultFunctionsAlertErrorCountThreshold = 10
 )
 
 type Config struct {
@@ -103,26 +83,6 @@ type Config struct {
 	WebsiteEnabled                    bool
 	WebsiteAddr                       string
 	WebsiteDomain                     string
-	FunctionsEnabled                  bool
-	FunctionsDir                      string
-	FunctionsRuntime                  string
-	FunctionsMemoryLimit              int
-	FunctionsCPULimit                 time.Duration
-	FunctionsNetworkAllow             bool
-	FunctionsFSAllow                  bool
-	FunctionsHotReload                bool
-	FunctionsHTTPPublic               bool
-	FunctionsHTTPCORSAllowOrigin      string
-	FunctionsHTTPCORSAllowMethods     string
-	FunctionsHTTPCORSAllowHeaders     string
-	FunctionsHTTPCORSExposeHeaders    string
-	FunctionsHTTPCORSMaxAge           int
-	FunctionsHTTPCORSAllowCredentials bool
-	FunctionsReloadInterval           time.Duration
-	FunctionsRateLimitPerMinute       int
-	FunctionsMaxConcurrent            int
-	FunctionsDailyQuota               int
-	FunctionsAlertErrorCountThreshold int
 }
 
 // Load returns configuration using process environment variables.
@@ -163,26 +123,6 @@ func LoadFromEnv(getenv func(string) string) Config {
 		UITheme:                           defaultUITheme,
 		WebsiteEnabled:                    defaultWebsiteEnabled,
 		WebsiteAddr:                       defaultWebsiteAddr,
-		FunctionsEnabled:                  defaultFunctionsEnabled,
-		FunctionsDir:                      defaultFunctionsDir,
-		FunctionsRuntime:                  defaultFunctionsRuntime,
-		FunctionsMemoryLimit:              defaultFunctionsMemoryLimit,
-		FunctionsCPULimit:                 defaultFunctionsCPULimit,
-		FunctionsNetworkAllow:             defaultFunctionsNetworkAllow,
-		FunctionsFSAllow:                  defaultFunctionsFSAllow,
-		FunctionsHotReload:                defaultFunctionsHotReload,
-		FunctionsHTTPPublic:               defaultFunctionsHTTPPublic,
-		FunctionsHTTPCORSAllowOrigin:      defaultFunctionsHTTPCORSAllowOrigin,
-		FunctionsHTTPCORSAllowMethods:     defaultFunctionsHTTPCORSAllowMethods,
-		FunctionsHTTPCORSAllowHeaders:     defaultFunctionsHTTPCORSAllowHeaders,
-		FunctionsHTTPCORSExposeHeaders:    defaultFunctionsHTTPCORSExposeHeaders,
-		FunctionsHTTPCORSMaxAge:           defaultFunctionsHTTPCORSMaxAge,
-		FunctionsHTTPCORSAllowCredentials: defaultFunctionsHTTPCORSAllowCredentials,
-		FunctionsReloadInterval:           defaultFunctionsReloadInterval,
-		FunctionsRateLimitPerMinute:       defaultFunctionsRateLimitPerMinute,
-		FunctionsMaxConcurrent:            defaultFunctionsMaxConcurrent,
-		FunctionsDailyQuota:               defaultFunctionsDailyQuota,
-		FunctionsAlertErrorCountThreshold: defaultFunctionsAlertErrorCountThreshold,
 	}
 
 	if v := getenv("S000_ADDR"); v != "" {
@@ -350,94 +290,6 @@ func LoadFromEnv(getenv func(string) string) Config {
 	}
 	if v := getenv("S000_WEBSITE_DOMAIN"); v != "" {
 		cfg.WebsiteDomain = v
-	}
-	if v := getenv("S000_FUNCTIONS_ENABLED"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsEnabled = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_DIR"); v != "" {
-		cfg.FunctionsDir = v
-	}
-	if v := getenv("S000_FUNCTIONS_RUNTIME"); v != "" {
-		cfg.FunctionsRuntime = strings.ToLower(strings.TrimSpace(v))
-	}
-	if v := getenv("S000_FUNCTIONS_MEMORY_LIMIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.FunctionsMemoryLimit = n
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_CPU_LIMIT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			cfg.FunctionsCPULimit = d
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_NETWORK_ALLOW"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsNetworkAllow = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_FS_ALLOW"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsFSAllow = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_HOT_RELOAD"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsHotReload = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_PUBLIC"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsHTTPPublic = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_ORIGIN"); v != "" {
-		cfg.FunctionsHTTPCORSAllowOrigin = v
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_METHODS"); v != "" {
-		cfg.FunctionsHTTPCORSAllowMethods = v
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_HEADERS"); v != "" {
-		cfg.FunctionsHTTPCORSAllowHeaders = v
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_EXPOSE_HEADERS"); v != "" {
-		cfg.FunctionsHTTPCORSExposeHeaders = v
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_MAX_AGE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.FunctionsHTTPCORSMaxAge = n
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_HTTP_CORS_ALLOW_CREDENTIALS"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.FunctionsHTTPCORSAllowCredentials = b
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_RELOAD_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			cfg.FunctionsReloadInterval = d
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_RATE_LIMIT_PER_MINUTE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.FunctionsRateLimitPerMinute = n
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_MAX_CONCURRENT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.FunctionsMaxConcurrent = n
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_DAILY_QUOTA"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.FunctionsDailyQuota = n
-		}
-	}
-	if v := getenv("S000_FUNCTIONS_ALERT_ERROR_COUNT_THRESHOLD"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.FunctionsAlertErrorCountThreshold = n
-		}
 	}
 
 	return cfg

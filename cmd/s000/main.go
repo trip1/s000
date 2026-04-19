@@ -14,7 +14,6 @@ import (
 	"ds9labs.com/s000/internal/auth"
 	"ds9labs.com/s000/internal/blob"
 	"ds9labs.com/s000/internal/config"
-	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/lifecycle"
 	"ds9labs.com/s000/internal/metadata"
 	"ds9labs.com/s000/internal/observability"
@@ -77,35 +76,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	functionsManager, err := functions.NewManager(functions.Config{
-		Enabled:                  cfg.FunctionsEnabled,
-		Dir:                      cfg.FunctionsDir,
-		Runtime:                  cfg.FunctionsRuntime,
-		MemoryLimitMB:            cfg.FunctionsMemoryLimit,
-		CPULimit:                 cfg.FunctionsCPULimit,
-		NetworkAllow:             cfg.FunctionsNetworkAllow,
-		FSAllow:                  cfg.FunctionsFSAllow,
-		HotReload:                cfg.FunctionsHotReload,
-		ReloadInterval:           cfg.FunctionsReloadInterval,
-		RateLimitPerMinute:       cfg.FunctionsRateLimitPerMinute,
-		MaxConcurrent:            cfg.FunctionsMaxConcurrent,
-		DailyInvocationQuota:     cfg.FunctionsDailyQuota,
-		AlertErrorCountThreshold: uint64(cfg.FunctionsAlertErrorCountThreshold),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := functionsManager.Start(context.Background()); err != nil {
-		log.Fatal(err)
-	}
-	defer func() {
-		if closeErr := functionsManager.Close(); closeErr != nil {
-			slog.Error("functions manager close failed", "error", closeErr)
-		}
-	}()
-	if cfg.FunctionsEnabled {
-		slog.Info("functions runtime enabled", "runtime", cfg.FunctionsRuntime, "dir", cfg.FunctionsDir)
-	}
 	metrics := observability.NewCollector()
 
 	lifecycleRules, err := lifecycle.ParseRules(cfg.LifecycleRules)
@@ -159,7 +129,7 @@ func main() {
 		}()
 	}
 
-	handler := server.NewHandler(server.Options{
+		handler := server.NewHandler(server.Options{
 		Domain:            cfg.Domain,
 		MaxInFlight:       cfg.MaxInFlight,
 		Verifier:          verifier,
@@ -183,14 +153,6 @@ func main() {
 		Tracing:                           observability.NoopTraceHooks(),
 		TracingOn:                         cfg.TracingEnabled,
 		BucketRegion:                      "us-east-1",
-		Functions:                         functionsManager,
-		FunctionsHTTPPublic:               cfg.FunctionsHTTPPublic,
-		FunctionsHTTPCORSAllowOrigin:      cfg.FunctionsHTTPCORSAllowOrigin,
-		FunctionsHTTPCORSAllowMethods:     cfg.FunctionsHTTPCORSAllowMethods,
-		FunctionsHTTPCORSAllowHeaders:     cfg.FunctionsHTTPCORSAllowHeaders,
-		FunctionsHTTPCORSExposeHeaders:    cfg.FunctionsHTTPCORSExposeHeaders,
-		FunctionsHTTPCORSMaxAge:           cfg.FunctionsHTTPCORSMaxAge,
-		FunctionsHTTPCORSAllowCredentials: cfg.FunctionsHTTPCORSAllowCredentials,
 	})
 	httpServer := server.NewHTTPServerWithOptions(cfg.Addr, handler, server.HTTPServerOptions{
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,

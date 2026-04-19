@@ -3,13 +3,10 @@ package server
 import (
 	"crypto/rand"
 	"embed"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -22,7 +19,6 @@ import (
 	"time"
 
 	"ds9labs.com/s000/internal/blob"
-	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/metadata"
 )
 
@@ -36,24 +32,15 @@ const (
 )
 
 type webUI struct {
-	templates *template.Template
-	staticFS  fs.FS
-	routeMap  []webRoute
-	store     metadata.Store
-	blob      *blob.Store
-	functions *functions.Manager
+	templates        *template.Template
+	staticFS         fs.FS
+	routeMap         []webRoute
+	store            metadata.Store
+	blob             *blob.Store
 
 	accessKey string
 	secretKey string
 	uiTheme   string
-
-	functionsHTTPPublic               bool
-	functionsHTTPCORSAllowOrigin      string
-	functionsHTTPCORSAllowMethods     string
-	functionsHTTPCORSAllowHeaders     string
-	functionsHTTPCORSExposeHeaders    string
-	functionsHTTPCORSMaxAge           int
-	functionsHTTPCORSAllowCredentials bool
 
 	mu       sync.Mutex
 	sessions map[string]uiSession
@@ -97,24 +84,6 @@ type webPageData struct {
 	CSRFToken                         string
 	Theme                             string
 	ThemeOptions                      []string
-	Functions                         []functions.FunctionSummary
-	Function                          *functions.Function
-	FunctionName                      string
-	FunctionVersions                  []functions.FunctionVersionSummary
-	FunctionMetrics                   []functions.FunctionMetric
-	FunctionAlerts                    []functions.FunctionAlert
-	FunctionLogs                      []functions.FunctionLogEntry
-	FunctionTemplates                 []functions.Template
-	InvokePayload                     string
-	InvokeResult                      string
-	FunctionsConfig                   functions.Config
-	FunctionsHTTPPublic               bool
-	FunctionsHTTPCORSAllowOrigin      string
-	FunctionsHTTPCORSAllowMethods     string
-	FunctionsHTTPCORSAllowHeaders     string
-	FunctionsHTTPCORSExposeHeaders    string
-	FunctionsHTTPCORSMaxAge           int
-	FunctionsHTTPCORSAllowCredentials bool
 }
 
 var supportedThemes = map[string]struct{}{
@@ -145,17 +114,9 @@ func newWebUI(opts Options) (*webUI, error) {
 		staticFS:                          assets,
 		store:                             opts.Metadata,
 		blob:                              opts.Blob,
-		functions:                         opts.Functions,
 		accessKey:                         opts.UIAccessKey,
 		secretKey:                         opts.UISecretKey,
 		uiTheme:                           normalizeTheme(opts.UITheme),
-		functionsHTTPPublic:               opts.FunctionsHTTPPublic,
-		functionsHTTPCORSAllowOrigin:      opts.FunctionsHTTPCORSAllowOrigin,
-		functionsHTTPCORSAllowMethods:     opts.FunctionsHTTPCORSAllowMethods,
-		functionsHTTPCORSAllowHeaders:     opts.FunctionsHTTPCORSAllowHeaders,
-		functionsHTTPCORSExposeHeaders:    opts.FunctionsHTTPCORSExposeHeaders,
-		functionsHTTPCORSMaxAge:           opts.FunctionsHTTPCORSMaxAge,
-		functionsHTTPCORSAllowCredentials: opts.FunctionsHTTPCORSAllowCredentials,
 		sessions:                          map[string]uiSession{},
 		routeMap: []webRoute{
 			{Path: "/app/login", Purpose: "operator sign-in shell"},
@@ -167,18 +128,6 @@ func newWebUI(opts Options) (*webUI, error) {
 			{Path: "/app/uploads", Purpose: "multipart upload monitoring"},
 			{Path: "/app/settings", Purpose: "client settings and endpoint info"},
 			{Path: "/app/audit", Purpose: "recent security and destructive events"},
-			{Path: "/app/functions", Purpose: "functions lifecycle and operations"},
-			{Path: "/app/functions/:name", Purpose: "function detail, versions, and invoke"},
-			{Path: "/app/partials/functions", Purpose: "htmx function table fragment"},
-			{Path: "/app/partials/function-versions", Purpose: "htmx function versions fragment"},
-			{Path: "/app/partials/function-metrics", Purpose: "htmx function metrics fragment"},
-			{Path: "/app/partials/function-alerts", Purpose: "htmx function alerts fragment"},
-			{Path: "/app/partials/function-logs", Purpose: "htmx function logs fragment"},
-			{Path: "/app/actions/functions/create", Purpose: "create function"},
-			{Path: "/app/actions/functions/update", Purpose: "update function"},
-			{Path: "/app/actions/functions/delete", Purpose: "delete function"},
-			{Path: "/app/actions/functions/activate", Purpose: "activate function version"},
-			{Path: "/app/actions/functions/invoke", Purpose: "invoke function manually"},
 			{Path: "/app/partials/buckets", Purpose: "htmx bucket table fragment"},
 			{Path: "/app/partials/objects", Purpose: "htmx object table fragment"},
 			{Path: "/app/partials/object-metadata", Purpose: "htmx object metadata fragment"},
@@ -592,191 +541,6 @@ func webUIHandler(opts Options) http.Handler {
 		http.Redirect(w, r, "/app/settings?flash=theme+updated", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("/app/actions/functions/create", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok {
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if !ui.validateCSRF(r, s) {
-			http.Error(w, "invalid csrf token", http.StatusForbidden)
-			return
-		}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
-			return
-		}
-		if err := parseFunctionActionForm(r); err != nil {
-			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
-			return
-		}
-		priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
-		module, err := parseFunctionModule(r, true)
-		if err != nil {
-			ui.respondActionResult(w, r, false, err.Error(), "/app/functions", "")
-			return
-		}
-		err = ui.functions.CreateFunction(functions.Function{
-			Name:     strings.TrimSpace(r.FormValue("name")),
-			Runtime:  strings.TrimSpace(r.FormValue("runtime")),
-			Trigger:  strings.TrimSpace(r.FormValue("trigger")),
-			Priority: priority,
-			Enabled:  r.FormValue("enabled") == "on",
-			Module:   module,
-		})
-		if err != nil {
-			ui.respondActionResult(w, r, false, "create failed", "/app/functions", "")
-			return
-		}
-		ui.respondActionResult(w, r, true, "function created", "/app/functions", "functions-changed")
-	})
-
-	mux.HandleFunc("/app/actions/functions/update", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok {
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if !ui.validateCSRF(r, s) {
-			http.Error(w, "invalid csrf token", http.StatusForbidden)
-			return
-		}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
-			return
-		}
-		if err := parseFunctionActionForm(r); err != nil {
-			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
-			return
-		}
-		name := strings.TrimSpace(r.FormValue("name"))
-		priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
-		module, err := parseFunctionModule(r, false)
-		if err != nil {
-			ui.respondActionResult(w, r, false, err.Error(), "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		err = ui.functions.UpdateFunction(name, functions.Function{
-			Runtime:  strings.TrimSpace(r.FormValue("runtime")),
-			Trigger:  strings.TrimSpace(r.FormValue("trigger")),
-			Priority: priority,
-			Enabled:  r.FormValue("enabled") == "on",
-			Module:   module,
-		})
-		if err != nil {
-			ui.respondActionResult(w, r, false, "update failed", "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		ui.respondActionResult(w, r, true, "function updated", "/app/functions/"+url.PathEscape(name), "functions-changed")
-	})
-
-	mux.HandleFunc("/app/actions/functions/delete", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok {
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if !ui.validateCSRF(r, s) {
-			http.Error(w, "invalid csrf token", http.StatusForbidden)
-			return
-		}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
-			return
-		}
-		name := strings.TrimSpace(r.FormValue("name"))
-		if err := ui.functions.DeleteFunction(name); err != nil {
-			ui.respondActionResult(w, r, false, "delete failed", "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		ui.respondActionResult(w, r, true, "function deleted", "/app/functions", "functions-changed")
-	})
-
-	mux.HandleFunc("/app/actions/functions/activate", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok {
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if !ui.validateCSRF(r, s) {
-			http.Error(w, "invalid csrf token", http.StatusForbidden)
-			return
-		}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
-			return
-		}
-		name := strings.TrimSpace(r.FormValue("name"))
-		version, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("version")))
-		if err := ui.functions.ActivateFunctionVersion(name, version); err != nil {
-			ui.respondActionResult(w, r, false, "activate failed", "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		ui.respondActionResult(w, r, true, "version activated", "/app/functions/"+url.PathEscape(name), "functions-changed")
-	})
-
-	mux.HandleFunc("/app/actions/functions/invoke", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok {
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if !ui.validateCSRF(r, s) {
-			http.Error(w, "invalid csrf token", http.StatusForbidden)
-			return
-		}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			ui.respondActionResult(w, r, false, "functions runtime disabled", "/app/functions", "")
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			ui.respondActionResult(w, r, false, "parse failed", "/app/functions", "")
-			return
-		}
-		name := strings.TrimSpace(r.FormValue("name"))
-		payload := strings.TrimSpace(r.FormValue("payload"))
-		if payload == "" {
-			payload = "{}"
-		}
-		if !json.Valid([]byte(payload)) {
-			ui.respondActionResult(w, r, false, "invalid JSON payload", "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		result, err := ui.functions.InvokeFunction(r.Context(), name, json.RawMessage(payload))
-		if err != nil {
-			ui.respondActionResult(w, r, false, "invoke failed", "/app/functions/"+url.PathEscape(name), "")
-			return
-		}
-		flash := "invoke complete"
-		if !result.Continue {
-			flash = "invoke denied"
-		}
-		ui.respondActionResult(w, r, true, flash, "/app/functions/"+url.PathEscape(name), "functions-changed")
-	})
-
 	mux.HandleFunc("/app/actions/download-object", func(w http.ResponseWriter, r *http.Request) {
 		_, ok := ui.requireSession(w, r)
 		if !ok {
@@ -878,69 +642,6 @@ func webUIHandler(opts Options) http.Handler {
 			return
 		}
 		ui.renderPage(w, r, "audit", webPageData{Title: "Audit", Page: "audit", RouteMap: ui.routeMap, CSRFToken: s.CSRFToken})
-	})
-	mux.HandleFunc("/app/functions", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		data := webPageData{Title: "Functions", Page: "functions", RouteMap: ui.routeMap, CSRFToken: s.CSRFToken, Flash: r.URL.Query().Get("flash")}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPage(w, r, "functions", data)
-			return
-		}
-		data.Functions = ui.functions.ListFunctions()
-		data.FunctionTemplates = functions.BuiltinTemplates()
-		data.FunctionMetrics = ui.functions.Metrics()
-		data.FunctionAlerts = ui.functions.Alerts()
-		data.FunctionsConfig = ui.functions.ConfigSnapshot()
-		data.FunctionsHTTPPublic = ui.functionsHTTPPublic
-		data.FunctionsHTTPCORSAllowOrigin = ui.functionsHTTPCORSAllowOrigin
-		data.FunctionsHTTPCORSAllowMethods = ui.functionsHTTPCORSAllowMethods
-		data.FunctionsHTTPCORSAllowHeaders = ui.functionsHTTPCORSAllowHeaders
-		data.FunctionsHTTPCORSExposeHeaders = ui.functionsHTTPCORSExposeHeaders
-		data.FunctionsHTTPCORSMaxAge = ui.functionsHTTPCORSMaxAge
-		data.FunctionsHTTPCORSAllowCredentials = ui.functionsHTTPCORSAllowCredentials
-		ui.renderPage(w, r, "functions", data)
-	})
-	mux.HandleFunc("/app/functions/", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		name := strings.TrimPrefix(r.URL.Path, "/app/functions/")
-		name = strings.TrimSpace(strings.Trim(name, "/"))
-		if name == "" {
-			http.NotFound(w, r)
-			return
-		}
-		data := webPageData{Title: "Function", Page: "function-detail", RouteMap: ui.routeMap, CSRFToken: s.CSRFToken, Flash: r.URL.Query().Get("flash")}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPage(w, r, "function_detail", data)
-			return
-		}
-		def, err := ui.functions.GetFunction(name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		versions, _ := ui.functions.ListFunctionVersions(name)
-		data.Function = &def
-		data.FunctionName = name
-		data.FunctionVersions = versions
-		data.FunctionMetrics = ui.functions.Metrics()
-		data.FunctionAlerts = ui.functions.Alerts()
-		data.FunctionLogs = ui.functions.RecentLogs(50)
-		data.FunctionsConfig = ui.functions.ConfigSnapshot()
-		ui.renderPage(w, r, "function_detail", data)
 	})
 	mux.HandleFunc("/app/buckets/", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := ui.requireSession(w, r)
@@ -1078,122 +779,6 @@ func webUIHandler(opts Options) http.Handler {
 			return
 		}
 		ui.renderPartial(w, r, "partials/flash", webPageData{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Error: r.URL.Query().Get("error")})
-	})
-	mux.HandleFunc("/app/partials/functions", func(w http.ResponseWriter, r *http.Request) {
-		_, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		data := webPageData{GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPartial(w, r, "partials/functions_table", data)
-			return
-		}
-		data.Functions = ui.functions.ListFunctions()
-		ui.renderPartial(w, r, "partials/functions_table", data)
-	})
-	mux.HandleFunc("/app/partials/function-versions", func(w http.ResponseWriter, r *http.Request) {
-		s, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		data := webPageData{FunctionName: name, CSRFToken: s.CSRFToken}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPartial(w, r, "partials/function_versions", data)
-			return
-		}
-		versions, err := ui.functions.ListFunctionVersions(name)
-		if err != nil {
-			data.Error = err.Error()
-		}
-		data.FunctionVersions = versions
-		ui.renderPartial(w, r, "partials/function_versions", data)
-	})
-	mux.HandleFunc("/app/partials/function-metrics", func(w http.ResponseWriter, r *http.Request) {
-		_, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		data := webPageData{}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPartial(w, r, "partials/function_metrics", data)
-			return
-		}
-		data.FunctionMetrics = ui.functions.Metrics()
-		ui.renderPartial(w, r, "partials/function_metrics", data)
-	})
-	mux.HandleFunc("/app/partials/function-alerts", func(w http.ResponseWriter, r *http.Request) {
-		_, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		data := webPageData{}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPartial(w, r, "partials/function_alerts", data)
-			return
-		}
-		data.FunctionAlerts = ui.functions.Alerts()
-		ui.renderPartial(w, r, "partials/function_alerts", data)
-	})
-	mux.HandleFunc("/app/partials/function-logs", func(w http.ResponseWriter, r *http.Request) {
-		_, ok := ui.requireSession(w, r)
-		if !ok || r.Method != http.MethodGet {
-			if ok {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		limit := 50
-		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		data := webPageData{}
-		if ui.functions == nil || !ui.functions.Enabled() {
-			data.Error = "functions runtime disabled"
-			ui.renderPartial(w, r, "partials/function_logs", data)
-			return
-		}
-		logs := ui.functions.RecentLogs(limit)
-		nameFilter := strings.TrimSpace(r.URL.Query().Get("name"))
-		triggerFilter := strings.TrimSpace(r.URL.Query().Get("trigger"))
-		outcomeFilter := strings.TrimSpace(r.URL.Query().Get("outcome"))
-		if nameFilter != "" || triggerFilter != "" || outcomeFilter != "" {
-			filtered := make([]functions.FunctionLogEntry, 0, len(logs))
-			for _, entry := range logs {
-				if nameFilter != "" && entry.Function != nameFilter {
-					continue
-				}
-				if triggerFilter != "" && entry.Trigger != triggerFilter {
-					continue
-				}
-				if outcomeFilter != "" && entry.Outcome != outcomeFilter {
-					continue
-				}
-				filtered = append(filtered, entry)
-			}
-			logs = filtered
-		}
-		data.FunctionLogs = logs
-		ui.renderPartial(w, r, "partials/function_logs", data)
 	})
 	mux.HandleFunc("/app/partials/pagination", func(w http.ResponseWriter, r *http.Request) {
 		_, ok := ui.requireSession(w, r)
@@ -1377,53 +962,6 @@ func (u *webUI) listObjectsData(r *http.Request, bucket string) (webPageData, er
 	}
 	sort.Strings(data.CommonPrefixes)
 	return data, nil
-}
-
-func parseFunctionActionForm(r *http.Request) error {
-	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-	if strings.HasPrefix(contentType, "multipart/form-data") {
-		return r.ParseMultipartForm(32 << 20)
-	}
-	return r.ParseForm()
-}
-
-func parseFunctionModule(r *http.Request, required bool) ([]byte, error) {
-	if file, header, err := r.FormFile("module_file"); err == nil {
-		defer func() { _ = file.Close() }()
-		if header == nil || strings.TrimSpace(header.Filename) == "" {
-			return nil, fmt.Errorf("invalid module file")
-		}
-		if ext := strings.ToLower(filepath.Ext(strings.TrimSpace(header.Filename))); ext != ".wasm" {
-			return nil, fmt.Errorf("module file must be .wasm")
-		}
-		module, err := io.ReadAll(io.LimitReader(file, 32<<20+1))
-		if err != nil {
-			return nil, fmt.Errorf("module file read failed")
-		}
-		if len(module) > 32<<20 {
-			return nil, fmt.Errorf("module file exceeds 32MB limit")
-		}
-		if len(module) == 0 {
-			return nil, fmt.Errorf("module file is empty")
-		}
-		return module, nil
-	}
-
-	if raw := strings.TrimSpace(r.FormValue("module_base64")); raw != "" {
-		module, err := base64.StdEncoding.DecodeString(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid module base64")
-		}
-		if len(module) == 0 {
-			return nil, fmt.Errorf("module payload is required")
-		}
-		return module, nil
-	}
-
-	if required {
-		return nil, fmt.Errorf("module file or module base64 is required")
-	}
-	return nil, nil
 }
 
 func (u *webUI) renderPartial(w http.ResponseWriter, r *http.Request, name string, data webPageData) {

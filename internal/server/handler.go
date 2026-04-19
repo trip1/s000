@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"ds9labs.com/s000/internal/blob"
-	"ds9labs.com/s000/internal/functions"
 	"ds9labs.com/s000/internal/lifecycle"
 	"ds9labs.com/s000/internal/metadata"
 	"ds9labs.com/s000/internal/observability"
@@ -44,14 +43,6 @@ type Options struct {
 	UISecretKey                       string
 	UITheme                           string
 	BucketRegion                      string
-	Functions                         *functions.Manager
-	FunctionsHTTPPublic               bool
-	FunctionsHTTPCORSAllowOrigin      string
-	FunctionsHTTPCORSAllowMethods     string
-	FunctionsHTTPCORSAllowHeaders     string
-	FunctionsHTTPCORSExposeHeaders    string
-	FunctionsHTTPCORSMaxAge           int
-	FunctionsHTTPCORSAllowCredentials bool
 }
 
 // NewHandler builds the root HTTP handler and middleware stack.
@@ -92,13 +83,6 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc(metricsPath, metricsHandler(opts))
 	mux.HandleFunc("/debug/lifecycle/config", lifecycleConfigDebug(opts))
 	mux.HandleFunc("/debug/lifecycle/metrics", lifecycleMetricsDebug(opts))
-	mux.HandleFunc("/functions/templates", functionsTemplatesHandler(opts))
-	mux.HandleFunc("/functions/metrics", functionsMetricsHandler(opts))
-	mux.HandleFunc("/functions/alerts", functionsAlertsHandler(opts))
-	mux.HandleFunc("/functions/logs", functionsLogsHandler(opts))
-	mux.HandleFunc("/functions", functionsCollectionHandler(opts))
-	mux.HandleFunc("/functions/", functionsItemHandler(opts))
-	mux.HandleFunc("/fn/", functionsHTTPInvokeHandler(opts))
 	mux.HandleFunc("/", s3Handler(opts))
 
 	return withMiddleware(mux, opts)
