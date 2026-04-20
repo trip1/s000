@@ -30,7 +30,17 @@
           <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">{{.}}</a></td>
           <td>-</td>
           <td>prefix</td>
-          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">Open</a></td>
+          <td>
+            <a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">Open</a>
+            <form method="post" action="/app/actions/delete-folder" onsubmit="return confirm('Delete all objects in this folder prefix?');">
+              <input type="hidden" name="_csrf" value="{{$.CSRFToken}}">
+              <input type="hidden" name="bucket" value="{{$.BucketName}}">
+              <input type="hidden" name="prefix" value="{{$.Prefix}}">
+              <input type="hidden" name="delimiter" value="{{$.Delimiter}}">
+              <input type="hidden" name="target_prefix" value="{{.}}">
+              <button type="submit">Delete folder</button>
+            </form>
+          </td>
         </tr>
       {{end}}
       {{if and (not .Objects) (not .CommonPrefixes)}}

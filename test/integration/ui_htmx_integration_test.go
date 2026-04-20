@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -178,7 +179,7 @@ func TestHTMXUITokenManagementCreateAndRevoke(t *testing.T) {
 	}
 }
 
-func TestHTMXUIFolderMarkerFlow(t *testing.T) {
+func TestHTMXUIFolderFlowMatchesS3Browsing(t *testing.T) {
 	t.Parallel()
 
 	bstore, mstore := newUIStores(t)
@@ -228,7 +229,9 @@ func TestHTMXUIFolderMarkerFlow(t *testing.T) {
 	}
 	_ = createFolderResp.Body.Close()
 
-	objectsResp, err := client.Get(ts.URL + "/app/buckets/folders-bucket/objects?prefix=photos/2026/&delimiter=/")
+	seedObjectForUIFolderTest(t, bstore, mstore, "folders-bucket", "photos/2026/guide.txt", "guide")
+
+	objectsResp, err := client.Get(ts.URL + "/app/buckets/folders-bucket/objects?prefix=photos/&delimiter=/")
 	if err != nil {
 		t.Fatalf("get objects page failed: %v", err)
 	}
@@ -243,6 +246,9 @@ func TestHTMXUIFolderMarkerFlow(t *testing.T) {
 	if !strings.Contains(string(objectsBody), "prefix=photos%2F") {
 		t.Fatalf("expected parent breadcrumb link in objects page: %s", string(objectsBody))
 	}
+	if !strings.Contains(string(objectsBody), "photos/2026/") {
+		t.Fatalf("expected created folder prefix in objects page: %s", string(objectsBody))
+	}
 
 	partialResp, err := client.Get(ts.URL + "/app/partials/objects?bucket=folders-bucket&prefix=photos/2026/&delimiter=/")
 	if err != nil {
@@ -253,32 +259,78 @@ func TestHTMXUIFolderMarkerFlow(t *testing.T) {
 	if partialResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected partial status 200, got %d", partialResp.StatusCode)
 	}
-	if !strings.Contains(string(partialBody), "photos/2026/") || !strings.Contains(string(partialBody), "Delete marker") {
-		t.Fatalf("expected folder marker row in partial output, got %q", string(partialBody))
+	if !strings.Contains(string(partialBody), "photos/2026/guide.txt") {
+		t.Fatalf("expected file inside folder listing before delete, got %q", string(partialBody))
+	}
+	if strings.Contains(string(partialBody), "Delete marker") {
+		t.Fatalf("expected S3-style folder view to hide marker rows, got %q", string(partialBody))
 	}
 
-	deleteFolderReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/delete-folder-marker", strings.NewReader(url.Values{
-		"_csrf":     {csrf},
-		"bucket":    {"folders-bucket"},
-		"key":       {"photos/2026/"},
-		"prefix":    {"photos/2026/"},
-		"delimiter": {"/"},
+	parentPartialResp, err := client.Get(ts.URL + "/app/partials/objects?bucket=folders-bucket&prefix=photos/&delimiter=/")
+	if err != nil {
+		t.Fatalf("get parent objects partial failed: %v", err)
+	}
+	parentPartialBody, _ := io.ReadAll(parentPartialResp.Body)
+	_ = parentPartialResp.Body.Close()
+	if !strings.Contains(string(parentPartialBody), "Delete folder") {
+		t.Fatalf("expected delete folder action for common prefix, got %q", string(parentPartialBody))
+	}
+
+	deleteFolderReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/delete-folder", strings.NewReader(url.Values{
+		"_csrf":         {csrf},
+		"bucket":        {"folders-bucket"},
+		"prefix":        {"photos/"},
+		"delimiter":     {"/"},
+		"target_prefix": {"photos/2026/"},
 	}.Encode()))
 	deleteFolderReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	deleteFolderResp, err := client.Do(deleteFolderReq)
 	if err != nil {
-		t.Fatalf("delete folder marker action failed: %v", err)
+		t.Fatalf("delete folder action failed: %v", err)
 	}
 	_ = deleteFolderResp.Body.Close()
 
 	partialResp, err = client.Get(ts.URL + "/app/partials/objects?bucket=folders-bucket&prefix=photos/2026/&delimiter=/")
 	if err != nil {
-		t.Fatalf("get objects partial after delete failed: %v", err)
+		t.Fatalf("get objects partial after folder delete failed: %v", err)
 	}
 	partialBody, _ = io.ReadAll(partialResp.Body)
 	_ = partialResp.Body.Close()
-	if strings.Contains(string(partialBody), "photos/2026/") {
-		t.Fatalf("expected deleted folder marker to be absent, got %q", string(partialBody))
+	if !strings.Contains(string(partialBody), "No objects found.") {
+		t.Fatalf("expected empty folder listing after delete, got %q", string(partialBody))
+	}
+
+	parentPartialResp, err = client.Get(ts.URL + "/app/partials/objects?bucket=folders-bucket&prefix=photos/&delimiter=/")
+	if err != nil {
+		t.Fatalf("get parent objects partial after folder delete failed: %v", err)
+	}
+	parentPartialBody, _ = io.ReadAll(parentPartialResp.Body)
+	_ = parentPartialResp.Body.Close()
+	if strings.Contains(string(parentPartialBody), "photos/2026/") {
+		t.Fatalf("expected deleted folder prefix to be absent in parent listing, got %q", string(parentPartialBody))
+	}
+}
+
+func seedObjectForUIFolderTest(t *testing.T, bstore *blob.Store, mstore metadata.Store, bucket, key, body string) {
+	t.Helper()
+	ref := blob.ObjectRef{Bucket: bucket, Key: key, VersionID: "null"}
+	meta, err := bstore.WriteObject(context.Background(), ref, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("seed blob write failed: %v", err)
+	}
+	err = mstore.PutObjectVersion(context.Background(), metadata.ObjectVersion{
+		Bucket:         bucket,
+		Key:            key,
+		VersionID:      "null",
+		Size:           meta.Size,
+		ETag:           meta.MD5Hex,
+		ChecksumSHA256: meta.SHA256,
+		StoragePath:    meta.Path,
+		Metadata:       map[string]string{"content-type": "text/plain; charset=utf-8"},
+		CreatedAt:      meta.CreatedAt,
+	})
+	if err != nil {
+		t.Fatalf("seed metadata write failed: %v", err)
 	}
 }
 

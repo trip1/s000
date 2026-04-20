@@ -165,21 +165,21 @@ func newWebUI(opts Options) (*webUI, error) {
 	}
 
 	return &webUI{
-		templates: tpls,
-		staticFS:  assets,
-		store:     opts.Metadata,
-		blob:      opts.Blob,
-		metrics:   opts.Metrics,
-		accessKey: opts.UIAccessKey,
-		secretKey: opts.UISecretKey,
-		uiTheme:   normalizeTheme(opts.UITheme),
-		pat:       opts.PATManager,
+		templates:                 tpls,
+		staticFS:                  assets,
+		store:                     opts.Metadata,
+		blob:                      opts.Blob,
+		metrics:                   opts.Metrics,
+		accessKey:                 opts.UIAccessKey,
+		secretKey:                 opts.UISecretKey,
+		uiTheme:                   normalizeTheme(opts.UITheme),
+		pat:                       opts.PATManager,
 		dashboardStatsSSEInterval: positiveOrDefaultDuration(opts.UIDashboardStatsSSE, defaultUIDashboardSSEInterval),
 		bucketsSSEInterval:        positiveOrDefaultDuration(opts.UIBucketsSSE, defaultUIDashboardTableInterval),
 		tokensSSEInterval:         positiveOrDefaultDuration(opts.UITokensSSE, defaultUIDashboardTokenInterval),
 		objectsSSEInterval:        positiveOrDefaultDuration(opts.UIObjectsSSE, defaultUIDashboardObjectInterval),
 		objectMetadataSSEInterval: positiveOrDefaultDuration(opts.UIObjectMetadataSSE, defaultUIDashboardObjectInterval),
-		sessions:  map[string]uiSession{},
+		sessions:                  map[string]uiSession{},
 		routeMap: []webRoute{
 			{Path: "/app/login", Purpose: "operator sign-in shell"},
 			{Path: "/app", Purpose: "dashboard and quick actions"},
@@ -209,6 +209,7 @@ func newWebUI(opts Options) (*webUI, error) {
 			{Path: "/app/actions/update-bucket-cors", Purpose: "update bucket CORS policy"},
 			{Path: "/app/actions/update-bucket-policy", Purpose: "update bucket policy document"},
 			{Path: "/app/actions/create-folder", Purpose: "create folder marker object"},
+			{Path: "/app/actions/delete-folder", Purpose: "delete objects under folder prefix"},
 			{Path: "/app/actions/delete-folder-marker", Purpose: "delete folder marker object"},
 			{Path: "/app/actions/tokens/create", Purpose: "create personal access token"},
 			{Path: "/app/actions/tokens/revoke", Purpose: "revoke personal access token"},
@@ -594,7 +595,7 @@ func webUIHandler(opts Options) http.Handler {
 			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+create+failed"), http.StatusSeeOther)
 			return
 		}
-		err = ui.store.PutObjectVersion(r.Context(), metadata.ObjectVersion{Bucket: bucket, Key: key, VersionID: versionID, Size: meta.Size, ETag: meta.MD5Hex, ChecksumSHA256: meta.SHA256, StoragePath: meta.Path, Metadata: map[string]string{"content-type": "application/x-directory"}, CreatedAt: meta.CreatedAt})
+		err = ui.store.PutObjectVersion(r.Context(), metadata.ObjectVersion{Bucket: bucket, Key: key, VersionID: versionID, Size: meta.Size, ETag: meta.MD5Hex, ChecksumSHA256: meta.SHA256, StoragePath: meta.Path, CreatedAt: meta.CreatedAt})
 		if err != nil {
 			_ = ui.blob.DeleteObject(r.Context(), ref, true)
 			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "metadata+write+failed"), http.StatusSeeOther)
@@ -709,6 +710,84 @@ func webUIHandler(opts Options) http.Handler {
 			}
 		}
 		http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+marker+deleted"), http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/app/actions/delete-folder", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := ui.requireSession(w, r)
+		if !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !ui.validateCSRF(r, s) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, "/app/buckets?flash=parse+failed", http.StatusSeeOther)
+			return
+		}
+		bucket := strings.TrimSpace(r.FormValue("bucket"))
+		prefix := normalizeUIPrefix(r.FormValue("prefix"))
+		delimiter := normalizeUIDelimiter(r.FormValue("delimiter"))
+		targetPrefix := normalizeUIPrefix(r.FormValue("target_prefix"))
+		if targetPrefix == "" {
+			targetPrefix = normalizeUIPrefix(r.FormValue("key"))
+		}
+		if bucket == "" || targetPrefix == "" {
+			http.Redirect(w, r, "/app/buckets?flash=bucket+and+target+prefix+required", http.StatusSeeOther)
+			return
+		}
+		if !strings.HasSuffix(targetPrefix, delimiter) {
+			targetPrefix += delimiter
+		}
+		if ui.store == nil {
+			http.Redirect(w, r, "/app/buckets?flash=metadata+store+unavailable", http.StatusSeeOther)
+			return
+		}
+		b, err := ui.store.GetBucket(r.Context(), bucket)
+		if err != nil {
+			http.Redirect(w, r, "/app/buckets?flash=bucket+not+found", http.StatusSeeOther)
+			return
+		}
+		objects, err := ui.store.ListObjects(r.Context(), bucket)
+		if err != nil {
+			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+delete+failed"), http.StatusSeeOther)
+			return
+		}
+		keys := make([]string, 0, len(objects))
+		for _, obj := range objects {
+			if strings.HasPrefix(obj.Key, targetPrefix) {
+				keys = append(keys, obj.Key)
+			}
+		}
+		if b.VersioningStatus == "Enabled" {
+			for _, key := range keys {
+				if err := ui.store.DeleteObject(r.Context(), bucket, key, newVersionID(), time.Now().UTC()); err != nil {
+					http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+delete+failed"), http.StatusSeeOther)
+					return
+				}
+			}
+			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+delete+markers+created"), http.StatusSeeOther)
+			return
+		}
+		removedObjects := make([]metadata.ObjectVersion, 0, len(keys))
+		for _, key := range keys {
+			removed, err := ui.store.DeleteAllObjectVersions(r.Context(), bucket, key)
+			if err != nil && err != metadata.ErrNotFound {
+				http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+delete+failed"), http.StatusSeeOther)
+				return
+			}
+			removedObjects = append(removedObjects, removed...)
+		}
+		if ui.blob != nil {
+			for _, obj := range removedObjects {
+				_ = ui.blob.DeleteObject(r.Context(), blob.ObjectRef{Bucket: obj.Bucket, Key: obj.Key, VersionID: obj.VersionID}, true)
+			}
+		}
+		http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "folder+deleted"), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/app/actions/theme", func(w http.ResponseWriter, r *http.Request) {
@@ -1477,7 +1556,7 @@ func (u *webUI) listObjectsData(r *http.Request, bucket string) (webPageData, er
 		return data, fmt.Errorf("invalid continuation token")
 	}
 
-	entries := listV2EntriesFromObjects(objects, data.Prefix, data.Delimiter)
+	entries := filterUIListEntries(listV2EntriesFromObjects(objects, data.Prefix, data.Delimiter), data.Prefix, data.Delimiter)
 	startIdx := 0
 	if startAfter != "" {
 		startIdx = len(entries)
@@ -1652,6 +1731,27 @@ func normalizeFolderMarkerKey(prefix, folder string) string {
 		p += "/"
 	}
 	return p + f + "/"
+}
+
+func filterUIListEntries(entries []listV2Entry, prefix, delimiter string) []listV2Entry {
+	if prefix == "" || delimiter == "" {
+		return entries
+	}
+	filtered := make([]listV2Entry, 0, len(entries))
+	for _, entry := range entries {
+		if shouldHideUIFolderMarker(entry, prefix, delimiter) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func shouldHideUIFolderMarker(entry listV2Entry, prefix, delimiter string) bool {
+	if entry.Object == nil {
+		return false
+	}
+	return entry.Object.Key == prefix && entry.Object.Size == 0 && strings.HasSuffix(entry.Object.Key, delimiter)
 }
 
 func buildUIBreadcrumbs(prefix string) []uiBreadcrumb {
