@@ -85,6 +85,7 @@
       <dt>Size</dt><dd>{{.Object.Size}}</dd>
       <dt>ETag</dt><dd>{{.Object.ETag}}</dd>
       <dt>Checksum</dt><dd>{{.Object.ChecksumSHA256}}</dd>
+      <dt>MIME type</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "content-type")}}{{index .Object.Metadata "content-type"}}{{else}}-{{end}}</dd>
       <dt>Created</dt><dd>{{.Object.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</dd>
     </dl>
   {{else}}
@@ -155,9 +156,12 @@
 {{end}}
 
 {{define "partials/dashboard_api_stats"}}
-<article>
-  <h2>API request stats</h2>
-  <dl>
+<article class="hud-panel telemetry-panel" data-title="API telemetry">
+  <div class="panel-heading">
+    <h2>API request stats</h2>
+    <small>Live ingress and reliability metrics</small>
+  </div>
+  <dl class="stats-grid">
     <dt>Total requests</dt><dd>{{.APIRequestStats.TotalRequests}}</dd>
     <dt>Error requests</dt><dd>{{.APIRequestStats.ErrorRequests}}</dd>
     <dt>4xx requests</dt><dd>{{.APIRequestStats.Error4xxRequests}}</dd>
@@ -168,23 +172,29 @@
     <dt>Total bytes in</dt><dd>{{.APIRequestStats.BytesInTotal}}</dd>
     <dt>Total bytes out</dt><dd>{{.APIRequestStats.BytesOutTotal}}</dd>
   </dl>
-  <h3>Request volume trend</h3>
-  <p><small>Last {{.APIRequestStats.TrendWindow}} minutes (max {{.APIRequestStats.TrendMax}} requests/min).</small></p>
-  {{if .APIRequestStats.TrendPoints}}
-    <svg viewBox="0 0 280 64" role="img" aria-label="API request trend over time" style="width:100%;max-width:320px;height:auto;display:block;">
-      <polyline points="{{.APIRequestStats.TrendPoints}}" fill="none" stroke="var(--primary-color)" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
-    </svg>
-  {{else}}
-    <p>No request trend data yet.</p>
-  {{end}}
-  <h3>Error trend</h3>
-  <p><small>Current error rate {{printf "%.2f" .APIRequestStats.ErrorRateTrendLast}}%; peak {{printf "%.2f" .APIRequestStats.ErrorRateTrendMax}}% in window.</small></p>
-  {{if .APIRequestStats.ErrorTrendPoints}}
-    <svg viewBox="0 0 280 64" role="img" aria-label="API error trend over time" style="width:100%;max-width:320px;height:auto;display:block;">
-      <polyline points="{{.APIRequestStats.ErrorTrendPoints}}" fill="none" stroke="#f85149" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
-    </svg>
-  {{else}}
-    <p>No error trend data yet.</p>
-  {{end}}
+  <div class="trend-grid">
+    <section class="trend-card">
+      <h3>Request volume trend</h3>
+      <p><small>Last {{.APIRequestStats.TrendWindow}} minutes (max {{.APIRequestStats.TrendMax}} requests/min).</small></p>
+      {{if .APIRequestStats.TrendPoints}}
+        <svg class="hud-trend" viewBox="0 0 280 64" role="img" aria-label="API request trend over time">
+          <polyline points="{{.APIRequestStats.TrendPoints}}" fill="none" stroke="var(--primary-color)" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+      {{else}}
+        <p>No request trend data yet.</p>
+      {{end}}
+    </section>
+    <section class="trend-card trend-alert">
+      <h3>Error trend</h3>
+      <p><small>Current error rate {{printf "%.2f" .APIRequestStats.ErrorRateTrendLast}}%; peak {{printf "%.2f" .APIRequestStats.ErrorRateTrendMax}}% in window.</small></p>
+      {{if .APIRequestStats.ErrorTrendPoints}}
+        <svg class="hud-trend" viewBox="0 0 280 64" role="img" aria-label="API error trend over time">
+          <polyline points="{{.APIRequestStats.ErrorTrendPoints}}" fill="none" stroke="#ff6b47" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+      {{else}}
+        <p>No error trend data yet.</p>
+      {{end}}
+    </section>
+  </div>
 </article>
 {{end}}

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   s000:
     build:
@@ -17,8 +15,15 @@ services:
       S000_DATA_DIR: "/var/lib/s000/data"
       S000_METADATA_BACKEND: "sqlite"
       S000_METADATA_DSN: "file:/var/lib/s000/data/s000-metadata.db"
+      S000_UI_THEME: "sysadmin90"
     volumes:
       - s000-data:/var/lib/s000/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   s000-data:

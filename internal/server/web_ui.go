@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io/fs"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -204,10 +205,12 @@ func newWebUI(opts Options) (*webUI, error) {
 			{Path: "/app/events/objects", Purpose: "sse object table updates"},
 			{Path: "/app/events/object-metadata", Purpose: "sse object metadata updates"},
 			{Path: "/app/actions/update-bucket-versioning", Purpose: "update bucket versioning setting"},
+			{Path: "/app/actions/delete-bucket", Purpose: "delete bucket and all contained objects"},
 			{Path: "/app/actions/update-bucket-public-access", Purpose: "update public access block toggles"},
 			{Path: "/app/actions/update-bucket-website", Purpose: "update bucket website settings"},
 			{Path: "/app/actions/update-bucket-cors", Purpose: "update bucket CORS policy"},
 			{Path: "/app/actions/update-bucket-policy", Purpose: "update bucket policy document"},
+			{Path: "/app/actions/update-object-mimetype", Purpose: "update object content-type metadata"},
 			{Path: "/app/actions/create-folder", Purpose: "create folder marker object"},
 			{Path: "/app/actions/delete-folder", Purpose: "delete objects under folder prefix"},
 			{Path: "/app/actions/delete-folder-marker", Purpose: "delete folder marker object"},
@@ -283,6 +286,68 @@ func webUIHandler(opts Options) http.Handler {
 			return
 		}
 		http.Redirect(w, r, "/app/buckets?flash=bucket+created", http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/app/actions/delete-bucket", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := ui.requireSession(w, r)
+		if !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !ui.validateCSRF(r, s) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, "/app/buckets?flash=parse+failed", http.StatusSeeOther)
+			return
+		}
+		bucket := strings.TrimSpace(r.FormValue("bucket"))
+		if bucket == "" {
+			http.Redirect(w, r, "/app/buckets?flash=bucket+name+is+required", http.StatusSeeOther)
+			return
+		}
+		if ui.store == nil {
+			http.Redirect(w, r, "/app/buckets?flash=metadata+store+unavailable", http.StatusSeeOther)
+			return
+		}
+
+		objects, err := ui.store.ListObjects(r.Context(), bucket)
+		if err != nil {
+			http.Redirect(w, r, "/app/buckets/"+url.PathEscape(bucket)+"?flash=list+objects+failed", http.StatusSeeOther)
+			return
+		}
+		for _, obj := range objects {
+			removed, delErr := ui.store.DeleteAllObjectVersions(r.Context(), bucket, obj.Key)
+			if delErr != nil && delErr != metadata.ErrNotFound {
+				http.Redirect(w, r, "/app/buckets/"+url.PathEscape(bucket)+"?flash=delete+bucket+contents+failed", http.StatusSeeOther)
+				return
+			}
+			if ui.blob != nil {
+				for _, removedObj := range removed {
+					_ = ui.blob.DeleteObject(r.Context(), blob.ObjectRef{Bucket: removedObj.Bucket, Key: removedObj.Key, VersionID: removedObj.VersionID}, true)
+				}
+			}
+		}
+
+		uploads, listUploadsErr := ui.store.ListMultipartUploads(r.Context(), bucket, "")
+		if listUploadsErr == nil {
+			for _, upload := range uploads {
+				_ = ui.store.DeleteMultipartUpload(r.Context(), upload.UploadID)
+				if ui.blob != nil {
+					_ = ui.blob.AbortMultipartUpload(r.Context(), upload.UploadID)
+				}
+			}
+		}
+
+		if err := ui.store.DeleteBucket(r.Context(), bucket); err != nil {
+			http.Redirect(w, r, "/app/buckets/"+url.PathEscape(bucket)+"?flash=delete+bucket+failed", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/app/buckets?flash=bucket+deleted+with+contents", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/app/actions/update-bucket-versioning", func(w http.ResponseWriter, r *http.Request) {
@@ -503,47 +568,95 @@ func webUIHandler(opts Options) http.Handler {
 		key := strings.TrimSpace(r.FormValue("key"))
 		prefix := normalizeUIPrefix(r.FormValue("prefix"))
 		delimiter := normalizeUIDelimiter(r.FormValue("delimiter"))
-		if bucket == "" || key == "" {
-			http.Redirect(w, r, "/app/buckets?flash=bucket+and+key+required", http.StatusSeeOther)
+		returnTo := safeUIReturnPath(r.FormValue("return_to"))
+		if bucket == "" {
+			http.Redirect(w, r, "/app/buckets?flash=bucket+required", http.StatusSeeOther)
 			return
 		}
 		if ui.store == nil || ui.blob == nil {
 			http.Redirect(w, r, "/app/buckets?flash=storage+unavailable", http.StatusSeeOther)
 			return
 		}
-		f, fh, err := r.FormFile("file")
-		if err != nil {
-			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "file+required"), http.StatusSeeOther)
+		redirectURL := uploadRedirectURL(bucket, prefix, delimiter, returnTo)
+
+		files := r.MultipartForm.File["files"]
+		legacyUpload := false
+		if len(files) == 0 {
+			f, fh, err := r.FormFile("file")
+			if err != nil {
+				http.Redirect(w, r, withUIFlash(redirectURL, "file+required"), http.StatusSeeOther)
+				return
+			}
+			_ = f.Close()
+			files = []*multipart.FileHeader{fh}
+			legacyUpload = true
+		}
+		if len(files) == 0 {
+			http.Redirect(w, r, withUIFlash(redirectURL, "file+required"), http.StatusSeeOther)
 			return
 		}
-		defer func() { _ = f.Close() }()
 
 		b, err := ui.store.GetBucket(r.Context(), bucket)
 		if err != nil {
 			http.Redirect(w, r, "/app/buckets?flash=bucket+not+found", http.StatusSeeOther)
 			return
 		}
-		versionID := "null"
-		if b.VersioningStatus == "Enabled" {
-			versionID = newVersionID()
+
+		fileKeys := r.MultipartForm.Value["file_key"]
+		uploaded := 0
+		for i, fh := range files {
+			if fh == nil {
+				continue
+			}
+			formKey := ""
+			if i < len(fileKeys) {
+				formKey = fileKeys[i]
+			}
+			fileKey := resolveUploadObjectKey(prefix, key, fh.Filename, formKey, legacyUpload, len(files))
+			if fileKey == "" {
+				http.Redirect(w, r, withUIFlash(redirectURL, "invalid+object+key"), http.StatusSeeOther)
+				return
+			}
+
+			src, openErr := fh.Open()
+			if openErr != nil {
+				http.Redirect(w, r, withUIFlash(redirectURL, "file+open+failed"), http.StatusSeeOther)
+				return
+			}
+
+			versionID := "null"
+			if b.VersioningStatus == "Enabled" {
+				versionID = newVersionID()
+			}
+			ref := blob.ObjectRef{Bucket: bucket, Key: fileKey, VersionID: versionID}
+			meta, writeErr := ui.blob.WriteObject(r.Context(), ref, src)
+			_ = src.Close()
+			if writeErr != nil {
+				http.Redirect(w, r, withUIFlash(redirectURL, "upload+failed"), http.StatusSeeOther)
+				return
+			}
+			contentType := strings.TrimSpace(fh.Header.Get("Content-Type"))
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			err = ui.store.PutObjectVersion(r.Context(), metadata.ObjectVersion{Bucket: bucket, Key: fileKey, VersionID: versionID, Size: meta.Size, ETag: meta.MD5Hex, ChecksumSHA256: meta.SHA256, StoragePath: meta.Path, Metadata: map[string]string{"content-type": contentType}, CreatedAt: meta.CreatedAt})
+			if err != nil {
+				_ = ui.blob.DeleteObject(r.Context(), ref, true)
+				http.Redirect(w, r, withUIFlash(redirectURL, "metadata+write+failed"), http.StatusSeeOther)
+				return
+			}
+			uploaded++
 		}
-		ref := blob.ObjectRef{Bucket: bucket, Key: key, VersionID: versionID}
-		meta, err := ui.blob.WriteObject(r.Context(), ref, f)
-		if err != nil {
-			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "upload+failed"), http.StatusSeeOther)
+
+		if uploaded == 0 {
+			http.Redirect(w, r, withUIFlash(redirectURL, "file+required"), http.StatusSeeOther)
 			return
 		}
-		contentType := strings.TrimSpace(fh.Header.Get("Content-Type"))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		err = ui.store.PutObjectVersion(r.Context(), metadata.ObjectVersion{Bucket: bucket, Key: key, VersionID: versionID, Size: meta.Size, ETag: meta.MD5Hex, ChecksumSHA256: meta.SHA256, StoragePath: meta.Path, Metadata: map[string]string{"content-type": contentType}, CreatedAt: meta.CreatedAt})
-		if err != nil {
-			_ = ui.blob.DeleteObject(r.Context(), ref, true)
-			http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "metadata+write+failed"), http.StatusSeeOther)
+		if uploaded == 1 {
+			http.Redirect(w, r, withUIFlash(redirectURL, "upload+complete"), http.StatusSeeOther)
 			return
 		}
-		http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "upload+complete"), http.StatusSeeOther)
+		http.Redirect(w, r, withUIFlash(redirectURL, "uploaded+"+strconv.Itoa(uploaded)+"+files"), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/app/actions/create-folder", func(w http.ResponseWriter, r *http.Request) {
@@ -654,6 +767,72 @@ func webUIHandler(opts Options) http.Handler {
 			}
 		}
 		http.Redirect(w, r, objectBrowserURL(bucket, prefix, delimiter, "object+deleted"), http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/app/actions/update-object-mimetype", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := ui.requireSession(w, r)
+		if !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !ui.validateCSRF(r, s) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, "/app/buckets?flash=parse+failed", http.StatusSeeOther)
+			return
+		}
+		bucket := strings.TrimSpace(r.FormValue("bucket"))
+		key := strings.TrimSpace(r.FormValue("key"))
+		contentType := strings.TrimSpace(r.FormValue("content_type"))
+		if bucket == "" || key == "" {
+			http.Redirect(w, r, "/app/buckets?flash=bucket+and+key+required", http.StatusSeeOther)
+			return
+		}
+		if ui.store == nil {
+			http.Redirect(w, r, "/app/buckets?flash=metadata+store+unavailable", http.StatusSeeOther)
+			return
+		}
+		obj, err := ui.store.GetLatestObjectVersion(r.Context(), bucket, key)
+		if err != nil {
+			http.Redirect(w, r, objectDetailURL(bucket, key, "object+not+found"), http.StatusSeeOther)
+			return
+		}
+		if obj.DeleteMarker {
+			http.Redirect(w, r, objectDetailURL(bucket, key, "object+not+found"), http.StatusSeeOther)
+			return
+		}
+		metaCopy := cloneStringMap(obj.Metadata)
+		if contentType == "" {
+			delete(metaCopy, "content-type")
+		} else {
+			metaCopy["content-type"] = contentType
+		}
+
+		versionID := obj.VersionID
+		if b, bucketErr := ui.store.GetBucket(r.Context(), bucket); bucketErr == nil && b.VersioningStatus == "Enabled" {
+			versionID = newVersionID()
+		}
+		err = ui.store.PutObjectVersion(r.Context(), metadata.ObjectVersion{
+			Bucket:         obj.Bucket,
+			Key:            obj.Key,
+			VersionID:      versionID,
+			Size:           obj.Size,
+			ETag:           obj.ETag,
+			ChecksumSHA256: obj.ChecksumSHA256,
+			StoragePath:    obj.StoragePath,
+			Metadata:       metaCopy,
+			CreatedAt:      time.Now().UTC(),
+		})
+		if err != nil {
+			http.Redirect(w, r, objectDetailURL(bucket, key, "metadata+write+failed"), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, objectDetailURL(bucket, key, "mime+type+updated"), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/app/actions/delete-folder-marker", func(w http.ResponseWriter, r *http.Request) {
@@ -978,7 +1157,7 @@ func webUIHandler(opts Options) http.Handler {
 			return
 		}
 		buckets, loadErr := ui.loadBuckets(r)
-		data := webPageData{Title: "Uploads", Page: "uploads", RouteMap: ui.routeMap, Buckets: buckets, CSRFToken: s.CSRFToken}
+		data := webPageData{Title: "Uploads", Page: "uploads", RouteMap: ui.routeMap, Buckets: buckets, CSRFToken: s.CSRFToken, Flash: r.URL.Query().Get("flash")}
 		if loadErr != nil {
 			data.Error = loadErr.Error()
 		}
@@ -1082,7 +1261,7 @@ func webUIHandler(opts Options) http.Handler {
 			ui.renderPage(w, r, "objects", data)
 		case "object":
 			obj, err := ui.loadObject(r, bucket, key)
-			data := webPageData{Title: "Object", Page: "object-detail", RouteMap: ui.routeMap, BucketName: bucket, ObjectKey: key, Object: obj, CSRFToken: s.CSRFToken}
+			data := webPageData{Title: "Object", Page: "object-detail", RouteMap: ui.routeMap, BucketName: bucket, ObjectKey: key, Object: obj, CSRFToken: s.CSRFToken, Flash: r.URL.Query().Get("flash")}
 			if err != nil {
 				data.Error = err.Error()
 			}
@@ -1733,6 +1912,68 @@ func normalizeFolderMarkerKey(prefix, folder string) string {
 	return p + f + "/"
 }
 
+func safeUIReturnPath(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	if !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") {
+		return ""
+	}
+	return v
+}
+
+func uploadRedirectURL(bucket, prefix, delimiter, returnTo string) string {
+	if returnTo != "" {
+		return returnTo
+	}
+	return objectBrowserURL(bucket, prefix, delimiter, "")
+}
+
+func withUIFlash(base, flash string) string {
+	if flash == "" {
+		return base
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		if strings.Contains(base, "?") {
+			return base + "&flash=" + flash
+		}
+		return base + "?flash=" + flash
+	}
+	q := u.Query()
+	q.Set("flash", flash)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func joinUploadObjectKey(prefix, filename string) string {
+	name := strings.TrimSpace(filename)
+	name = strings.TrimPrefix(name, "/")
+	if name == "" {
+		return ""
+	}
+	p := normalizeUIPrefix(prefix)
+	if p == "" {
+		return name
+	}
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p + name
+}
+
+func resolveUploadObjectKey(prefix, explicitKey, filename, formKey string, legacyUpload bool, fileCount int) string {
+	if fk := strings.TrimSpace(formKey); fk != "" {
+		return joinUploadObjectKey(prefix, fk)
+	}
+	fileKey := explicitKey
+	if !legacyUpload || fileCount > 1 || fileKey == "" {
+		fileKey = joinUploadObjectKey(prefix, filename)
+	}
+	return fileKey
+}
+
 func filterUIListEntries(entries []listV2Entry, prefix, delimiter string) []listV2Entry {
 	if prefix == "" || delimiter == "" {
 		return entries
@@ -1792,6 +2033,22 @@ func objectBrowserURL(bucket, prefix, delimiter, flash string) string {
 		return base
 	}
 	return base + "?" + encoded
+}
+
+func objectDetailURL(bucket, key, flash string) string {
+	base := "/app/buckets/" + url.PathEscape(bucket) + "/objects/" + url.PathEscape(key)
+	if flash == "" {
+		return base
+	}
+	return withUIFlash(base, flash)
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values)+1)
+	for k, v := range values {
+		out[k] = v
+	}
+	return out
 }
 
 func randomHex(n int) string {

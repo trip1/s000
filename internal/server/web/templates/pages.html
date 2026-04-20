@@ -17,43 +17,73 @@
 
 {{define "pages/dashboard"}}
   {{template "layout_start" .}}
-  <article data-title="Dashboard">
-    <h1>Dashboard</h1>
-    {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
-    <p>Bucket-level inventory and API request telemetry.</p>
-  </article>
-  <article>
-    <h2>Bucket inventory</h2>
-    <figure>
-      <table>
-        <thead><tr><th>Bucket</th><th>Objects</th><th>Total size (bytes)</th><th>Region</th><th>Versioning</th><th>Created</th></tr></thead>
-        <tbody>
-          {{if not .BucketSummaries}}
-            <tr><td colspan="6">No buckets found.</td></tr>
-          {{end}}
-          {{range .BucketSummaries}}
-            <tr>
-              <td><a href="/app/buckets/{{p .Name}}/objects">{{.Name}}</a></td>
-              <td>{{.ObjectCount}}</td>
-              <td>{{.TotalSizeBytes}}</td>
-              <td>{{.Region}}</td>
-              <td>{{.VersioningStatus}}</td>
-              <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
-            </tr>
-          {{end}}
-        </tbody>
-      </table>
-    </figure>
-  </article>
-  <div id="dashboard-stats" hx-ext="sse" sse-connect="/app/events/dashboard-stats" sse-swap="dashboard-stats">
-    {{template "partials/dashboard_api_stats" .}}
-  </div>
-  <article>
-    <h2>Route map</h2>
-    <ul>
-      {{range .RouteMap}}<li><code>{{.Path}}</code> - {{.Purpose}}</li>{{end}}
-    </ul>
-  </article>
+  <section class="future-dashboard" aria-label="Mission control dashboard">
+    <article class="hud-panel hero-panel" data-title="Dashboard">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">Mission Control</p>
+          <h1>Dashboard</h1>
+          {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
+          <p>Bucket-level inventory and API request telemetry.</p>
+        </div>
+        <div class="hero-kpis" aria-label="Operational highlights">
+          <div class="kpi-chip">
+            <span>Buckets online</span>
+            <strong data-live-number>{{len .BucketSummaries}}</strong>
+          </div>
+          <div class="kpi-chip">
+            <span>Route endpoints</span>
+            <strong data-live-number>{{len .RouteMap}}</strong>
+          </div>
+          <div class="kpi-chip">
+            <span>Success rate</span>
+            <strong data-live-number data-suffix="%">{{printf "%.2f" .APIRequestStats.SuccessRatePct}}</strong>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="hud-panel bucket-panel">
+      <div class="panel-heading">
+        <h2>Bucket inventory</h2>
+        <small>Live bucket posture and storage footprint</small>
+      </div>
+      <figure>
+        <table>
+          <thead><tr><th>Bucket</th><th>Objects</th><th>Total size (bytes)</th><th>Region</th><th>Versioning</th><th>Created</th></tr></thead>
+          <tbody>
+            {{if not .BucketSummaries}}
+              <tr><td colspan="6">No buckets found.</td></tr>
+            {{end}}
+            {{range .BucketSummaries}}
+              <tr>
+                <td><a href="/app/buckets/{{p .Name}}/objects">{{.Name}}</a></td>
+                <td data-live-number>{{.ObjectCount}}</td>
+                <td data-live-number>{{.TotalSizeBytes}}</td>
+                <td>{{.Region}}</td>
+                <td>{{.VersioningStatus}}</td>
+                <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+              </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </figure>
+    </article>
+
+    <div id="dashboard-stats" hx-ext="sse" sse-connect="/app/events/dashboard-stats" sse-swap="dashboard-stats">
+      {{template "partials/dashboard_api_stats" .}}
+    </div>
+
+    <article class="hud-panel route-panel">
+      <div class="panel-heading">
+        <h2>Route map</h2>
+        <small>Control surface for operator actions</small>
+      </div>
+      <ul class="route-grid">
+        {{range .RouteMap}}<li><code>{{.Path}}</code><span>{{.Purpose}}</span></li>{{end}}
+      </ul>
+    </article>
+  </section>
   {{template "layout_end" .}}
 {{end}}
 
@@ -164,6 +194,15 @@
       <button type="submit">Save policy</button>
     </form>
   </article>
+  <article>
+    <h2>Danger zone</h2>
+    <p>Delete this bucket and remove all objects stored in it.</p>
+    <form method="post" action="/app/actions/delete-bucket" aria-label="Delete bucket" onsubmit="return confirm('Delete this bucket and all objects? This cannot be undone.');">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <button type="submit">Delete bucket and contents</button>
+    </form>
+  </article>
   {{template "layout_end" .}}
 {{end}}
 
@@ -227,8 +266,17 @@
   {{template "layout_start" .}}
   <article>
     <h1>Object Detail</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
     {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
     <p><a href="/app/actions/download-object?bucket={{q .BucketName}}&key={{q .ObjectKey}}">Download object</a></p>
+    <form method="post" action="/app/actions/update-object-mimetype" aria-label="Update object MIME type">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="key" value="{{.ObjectKey}}">
+      <label for="object-mime-type">MIME type</label>
+      <input id="object-mime-type" type="text" name="content_type" value="{{if and .Object .Object.Metadata}}{{index .Object.Metadata "content-type"}}{{end}}" placeholder="application/wasm">
+      <button type="submit">Update MIME type</button>
+    </form>
     <form method="post" action="/app/actions/delete-object" aria-label="Delete object">
       <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
       <input type="hidden" name="bucket" value="{{.BucketName}}">
@@ -244,10 +292,42 @@
 
 {{define "pages/uploads"}}
   {{template "layout_start" .}}
-  <article>
+  <article data-title="Uploads">
     <h1>Multipart Uploads</h1>
+    {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
     {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
-    <p>Upload monitoring shell page.</p>
+    <p>Upload monitoring shell page with drag-and-drop support.</p>
+  </article>
+  <article>
+    <h2>Quick upload</h2>
+    <form method="post" action="/app/actions/upload-object" enctype="multipart/form-data" data-drop-upload-form aria-label="Upload files">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="/app/uploads">
+      <input type="hidden" name="delimiter" value="/">
+      <label for="upload-bucket-select">Bucket</label>
+      <select id="upload-bucket-select" name="bucket" required>
+        <option value="">Select a bucket</option>
+        {{range .Buckets}}<option value="{{.Name}}">{{.Name}}</option>{{end}}
+      </select>
+      <label for="upload-prefix">Key prefix (optional)</label>
+      <input id="upload-prefix" type="text" name="prefix" placeholder="photos/2026/">
+      <input id="uploads-files" type="file" name="files" multiple data-drop-input hidden>
+      <input id="uploads-folder" type="file" webkitdirectory directory multiple data-drop-folder-input hidden>
+      <div class="drop-upload-zone" data-drop-zone tabindex="0" role="button" aria-controls="uploads-files" aria-label="Drag and drop files here or press enter to browse files">
+        <strong>Drop files here</strong>
+        <span>or click to browse. Drop a folder to preserve its structure in object keys.</span>
+      </div>
+      <div class="drop-upload-actions">
+        <button type="button" data-drop-select-files>Select files</button>
+        <button type="button" data-drop-select-folder>Select folder</button>
+      </div>
+      <ul class="drop-upload-list" data-drop-list><li>No files selected.</li></ul>
+      <progress max="100" value="0" hidden data-drop-progress></progress>
+      <p role="status" aria-live="polite" data-drop-status></p>
+      <button type="submit">Upload selected files</button>
+    </form>
+  </article>
+  <article>
     <h2>Bucket settings</h2>
     <ul>
       {{if not .Buckets}}

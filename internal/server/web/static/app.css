@@ -39,6 +39,138 @@ article {
   margin-bottom: 1rem;
 }
 
+.drop-upload-zone {
+  margin-top: 0.5rem;
+  padding: 1rem;
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+  display: grid;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.drop-upload-zone strong {
+  font-size: 0.95rem;
+}
+
+.drop-upload-zone span {
+  color: var(--muted-color);
+  font-size: 0.85rem;
+}
+
+.drop-upload-zone.is-drag-over {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 35%, transparent);
+}
+
+.drop-upload-list {
+  margin: 0.6rem 0;
+  padding-left: 1.1rem;
+}
+
+.drop-upload-list li {
+  margin-bottom: 0.2rem;
+  font-size: 0.85rem;
+}
+
+.drop-upload-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+[data-drop-status] {
+  margin: 0.4rem 0 0.6rem;
+  min-height: 1.2rem;
+  color: var(--muted-color);
+  font-size: 0.85rem;
+}
+
+[data-drop-progress] {
+  width: 100%;
+  margin-top: 0.2rem;
+}
+
+/* ============================================
+   Shared Future-Tech App Shell
+   ============================================ */
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) {
+  background:
+    radial-gradient(circle at 10% 10%, color-mix(in srgb, var(--primary-color) 18%, transparent), transparent 42%),
+    radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--primary-color) 10%, transparent), transparent 35%),
+    var(--bg-color);
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) .container {
+  max-width: 1240px;
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) article {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 32%, var(--border-color));
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--card-bg) 88%, transparent),
+    color-mix(in srgb, var(--bg-color) 82%, transparent)
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--primary-color) 10%, transparent),
+    0 14px 24px color-mix(in srgb, var(--bg-color) 76%, #000);
+  animation: shell-panel-rise 220ms ease-out;
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) article::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--primary-color) 6%, transparent), transparent);
+  transform: none;
+  pointer-events: none;
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) article[data-title]::before {
+  color: color-mix(in srgb, var(--primary-color) 72%, #9ed7ff);
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) table {
+  border-collapse: collapse;
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) th,
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) td {
+  border-bottom: 1px solid color-mix(in srgb, var(--primary-color) 16%, var(--border-color));
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) tbody tr:hover {
+  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) input:focus,
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) select:focus,
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) textarea:focus {
+  outline: 1px solid color-mix(in srgb, var(--primary-color) 65%, #fff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 24%, transparent);
+}
+
+body[data-page]:not([data-page="dashboard"]):not([data-page=""]) .flash.success {
+  border: 1px solid color-mix(in srgb, var(--primary-color) 58%, transparent);
+  background: color-mix(in srgb, var(--primary-color) 13%, transparent);
+}
+
+@keyframes shell-panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 h1, h2, h3, h4, h5, h6 {
   margin-top: 0;
 }
@@ -531,5 +663,255 @@ html[data-theme="dracula"] ::-webkit-scrollbar-thumb:hover {
   html[data-theme="dracula"] header.topbar {
     flex-direction: column;
     gap: 0.5rem;
+  }
+}
+
+/* ============================================
+   Premium Future-Tech Dashboard
+   ============================================ */
+body[data-page="dashboard"] {
+  background:
+    radial-gradient(circle at 8% 15%, rgba(59, 232, 255, 0.18), transparent 44%),
+    radial-gradient(circle at 92% 8%, rgba(255, 130, 48, 0.2), transparent 38%),
+    linear-gradient(120deg, #08111f 0%, #091827 48%, #0b1f33 100%);
+}
+
+body[data-page="dashboard"] .container {
+  max-width: 1320px;
+}
+
+body[data-page="dashboard"] .future-dashboard {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  padding-bottom: 1rem;
+}
+
+body[data-page="dashboard"] .future-dashboard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(to right, rgba(130, 220, 255, 0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(130, 220, 255, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), transparent 90%);
+}
+
+body[data-page="dashboard"] .hud-panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(112, 189, 242, 0.35);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(10, 28, 45, 0.92), rgba(7, 21, 36, 0.88));
+  box-shadow: inset 0 0 0 1px rgba(37, 119, 173, 0.25), 0 20px 34px rgba(1, 8, 16, 0.44);
+  animation: hud-enter 260ms ease-out;
+}
+
+body[data-page="dashboard"] .hud-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(89, 220, 255, 0.05), transparent);
+  transform: none;
+  pointer-events: none;
+}
+
+body[data-page="dashboard"] .panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+body[data-page="dashboard"] .panel-heading small,
+body[data-page="dashboard"] .eyebrow {
+  color: #6dbde8;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+body[data-page="dashboard"] .hero-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1rem;
+  align-items: center;
+}
+
+body[data-page="dashboard"] .hero-kpis {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+body[data-page="dashboard"] .kpi-chip {
+  position: relative;
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(104, 177, 235, 0.38);
+  background: linear-gradient(170deg, rgba(12, 35, 56, 0.95), rgba(9, 24, 41, 0.95));
+}
+
+body[data-page="dashboard"] .kpi-chip::before {
+  content: "";
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: #5bf2ff;
+  box-shadow: 0 0 4px rgba(91, 242, 255, 0.65);
+}
+
+body[data-page="dashboard"] .kpi-chip span {
+  display: block;
+  padding-left: 0.9rem;
+  color: #9ab9d1;
+  font-size: 0.72rem;
+}
+
+body[data-page="dashboard"] .kpi-chip strong {
+  display: block;
+  padding-left: 0.9rem;
+  color: #eaf7ff;
+  font-size: 1.28rem;
+  letter-spacing: 0.03em;
+}
+
+body[data-page="dashboard"] .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.65rem 0.9rem;
+  margin: 0;
+}
+
+body[data-page="dashboard"] .stats-grid dt {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #86abca;
+}
+
+body[data-page="dashboard"] .stats-grid dd {
+  margin: 0;
+  color: #f7fdff;
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-shadow: 0 0 6px rgba(116, 231, 255, 0.14);
+}
+
+body[data-page="dashboard"] .trend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.9rem;
+}
+
+body[data-page="dashboard"] .trend-card {
+  border: 1px solid rgba(101, 173, 227, 0.36);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: rgba(5, 18, 31, 0.6);
+}
+
+body[data-page="dashboard"] .trend-alert {
+  border-color: rgba(255, 140, 103, 0.45);
+}
+
+body[data-page="dashboard"] .hud-trend {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+body[data-page="dashboard"] .hud-trend polyline {
+  stroke-dasharray: 320;
+  stroke-dashoffset: 0;
+}
+
+body[data-page="dashboard"] .route-grid {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.55rem;
+}
+
+body[data-page="dashboard"] .route-grid li {
+  border: 1px solid rgba(88, 154, 203, 0.34);
+  border-radius: 9px;
+  padding: 0.6rem 0.7rem;
+  background: rgba(4, 16, 27, 0.56);
+  display: grid;
+  gap: 0.25rem;
+}
+
+body[data-page="dashboard"] .route-grid code {
+  color: #76f3ff;
+  font-size: 0.78rem;
+}
+
+body[data-page="dashboard"] .route-grid span {
+  color: #b0c7da;
+  font-size: 0.78rem;
+}
+
+body[data-page="dashboard"] .bucket-panel table tbody tr:hover {
+  background: rgba(89, 225, 255, 0.1);
+  transition: background-color 120ms linear;
+}
+
+@keyframes hud-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 900px) {
+  body[data-page="dashboard"] .hero-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="dashboard"] .hero-kpis {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  body[data-page="dashboard"] .trend-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  body[data-page="dashboard"] .hero-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="dashboard"] .panel-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  body[data-page="dashboard"] .route-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-page="dashboard"] .hud-panel,
+  body[data-page="dashboard"] .hud-panel::after,
+  body[data-page="dashboard"] .kpi-chip::before,
+  body[data-page="dashboard"] .hud-trend polyline {
+    animation: none;
   }
 }

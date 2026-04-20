@@ -3,8 +3,11 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -12,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ds9labs.com/s000/internal/auth"
 	"ds9labs.com/s000/internal/blob"
@@ -308,6 +312,226 @@ func TestHTMXUIFolderFlowMatchesS3Browsing(t *testing.T) {
 	_ = parentPartialResp.Body.Close()
 	if strings.Contains(string(parentPartialBody), "photos/2026/") {
 		t.Fatalf("expected deleted folder prefix to be absent in parent listing, got %q", string(parentPartialBody))
+	}
+}
+
+func TestHTMXUIBucketDeleteRemovesBucketAndContents(t *testing.T) {
+	t.Parallel()
+
+	bstore, mstore := newUIStores(t)
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "delete-bucket", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	seedObjectForUIFolderTest(t, bstore, mstore, "delete-bucket", "assets/main.js", "console.log('ok')")
+
+	h := server.NewHandler(server.Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret"})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/app/login", url.Values{"access_key": {"admin"}, "secret_key": {"secret"}})
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	_ = loginResp.Body.Close()
+
+	bucketResp, err := client.Get(ts.URL + "/app/buckets/delete-bucket")
+	if err != nil {
+		t.Fatalf("get bucket detail page failed: %v", err)
+	}
+	bucketPage, _ := io.ReadAll(bucketResp.Body)
+	_ = bucketResp.Body.Close()
+	csrf := extractToken(string(bucketPage))
+	if csrf == "" {
+		t.Fatalf("failed to find csrf token in bucket detail page: %s", string(bucketPage))
+	}
+	if !strings.Contains(string(bucketPage), "Delete bucket and contents") {
+		t.Fatalf("expected bucket delete action in bucket detail page: %s", string(bucketPage))
+	}
+
+	deleteReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/delete-bucket", strings.NewReader(url.Values{
+		"_csrf":  {csrf},
+		"bucket": {"delete-bucket"},
+	}.Encode()))
+	deleteReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleteResp, err := client.Do(deleteReq)
+	if err != nil {
+		t.Fatalf("delete bucket action failed: %v", err)
+	}
+	deleteBody, _ := io.ReadAll(deleteResp.Body)
+	_ = deleteResp.Body.Close()
+	if deleteResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected delete bucket final status 200, got %d body=%q", deleteResp.StatusCode, string(deleteBody))
+	}
+	if !strings.Contains(string(deleteBody), "bucket deleted with contents") {
+		t.Fatalf("expected delete bucket flash message in buckets page, got %q", string(deleteBody))
+	}
+
+	if _, err := mstore.GetBucket(context.Background(), "delete-bucket"); !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("expected deleted bucket to be absent, got err=%v", err)
+	}
+	if _, err := mstore.GetLatestObjectVersion(context.Background(), "delete-bucket", "assets/main.js"); !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("expected deleted object metadata to be absent, got err=%v", err)
+	}
+}
+
+func TestHTMXUIUploadsPageSupportsMultiFileUpload(t *testing.T) {
+	t.Parallel()
+
+	bstore, mstore := newUIStores(t)
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "uploads-bucket", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	h := server.NewHandler(server.Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret"})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/app/login", url.Values{"access_key": {"admin"}, "secret_key": {"secret"}})
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	_ = loginResp.Body.Close()
+
+	uploadsResp, err := client.Get(ts.URL + "/app/uploads")
+	if err != nil {
+		t.Fatalf("get uploads page failed: %v", err)
+	}
+	uploadsPage, _ := io.ReadAll(uploadsResp.Body)
+	_ = uploadsResp.Body.Close()
+	csrf := extractToken(string(uploadsPage))
+	if csrf == "" {
+		t.Fatalf("failed to find csrf token in uploads page: %s", string(uploadsPage))
+	}
+	if !strings.Contains(string(uploadsPage), "Drop files here") {
+		t.Fatalf("expected drag and drop helper text in uploads page: %s", string(uploadsPage))
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("_csrf", csrf)
+	_ = writer.WriteField("bucket", "uploads-bucket")
+	_ = writer.WriteField("prefix", "batch/")
+	_ = writer.WriteField("delimiter", "/")
+	_ = writer.WriteField("return_to", "/app/uploads")
+	fileA, _ := writer.CreateFormFile("files", "a.txt")
+	_, _ = fileA.Write([]byte("alpha"))
+	_ = writer.WriteField("file_key", "a.txt")
+	fileB, _ := writer.CreateFormFile("files", "b.txt")
+	_, _ = fileB.Write([]byte("beta"))
+	_ = writer.WriteField("file_key", "b.txt")
+	fileC, _ := writer.CreateFormFile("files", "c.txt")
+	_, _ = fileC.Write([]byte("gamma"))
+	_ = writer.WriteField("file_key", "folder/nested/c.txt")
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer failed: %v", err)
+	}
+
+	uploadReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/upload-object", body)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadResp, err := client.Do(uploadReq)
+	if err != nil {
+		t.Fatalf("multi upload request failed: %v", err)
+	}
+	uploadRespBody, _ := io.ReadAll(uploadResp.Body)
+	_ = uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected upload redirect landing status 200, got %d body=%q", uploadResp.StatusCode, string(uploadRespBody))
+	}
+	if !strings.Contains(string(uploadRespBody), "uploaded&#43;3&#43;files") {
+		t.Fatalf("expected multi upload flash message in uploads page, got %q", string(uploadRespBody))
+	}
+
+	objA, err := mstore.GetLatestObjectVersion(context.Background(), "uploads-bucket", "batch/a.txt")
+	if err != nil {
+		t.Fatalf("expected uploaded key batch/a.txt, got error: %v", err)
+	}
+	if objA.Size != 5 {
+		t.Fatalf("unexpected size for batch/a.txt: %d", objA.Size)
+	}
+	objB, err := mstore.GetLatestObjectVersion(context.Background(), "uploads-bucket", "batch/b.txt")
+	if err != nil {
+		t.Fatalf("expected uploaded key batch/b.txt, got error: %v", err)
+	}
+	if objB.Size != 4 {
+		t.Fatalf("unexpected size for batch/b.txt: %d", objB.Size)
+	}
+	objC, err := mstore.GetLatestObjectVersion(context.Background(), "uploads-bucket", "batch/folder/nested/c.txt")
+	if err != nil {
+		t.Fatalf("expected uploaded key batch/folder/nested/c.txt, got error: %v", err)
+	}
+	if objC.Size != 5 {
+		t.Fatalf("unexpected size for batch/folder/nested/c.txt: %d", objC.Size)
+	}
+}
+
+func TestHTMXUIObjectMimeTypeCanBeUpdatedAfterUpload(t *testing.T) {
+	t.Parallel()
+
+	bstore, mstore := newUIStores(t)
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "mime-bucket", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	seedObjectForUIFolderTest(t, bstore, mstore, "mime-bucket", "web/composeApp.wasm", "wasm-bits")
+
+	h := server.NewHandler(server.Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret"})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/app/login", url.Values{"access_key": {"admin"}, "secret_key": {"secret"}})
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	_ = loginResp.Body.Close()
+
+	detailURL := ts.URL + "/app/buckets/mime-bucket/objects/" + url.PathEscape("web/composeApp.wasm")
+	detailResp, err := client.Get(detailURL)
+	if err != nil {
+		t.Fatalf("get object detail page failed: %v", err)
+	}
+	detailBody, _ := io.ReadAll(detailResp.Body)
+	_ = detailResp.Body.Close()
+	csrf := extractToken(string(detailBody))
+	if csrf == "" {
+		t.Fatalf("failed to find csrf token in object detail page: %s", string(detailBody))
+	}
+	if !strings.Contains(string(detailBody), "text/plain; charset=utf-8") {
+		t.Fatalf("expected existing mime type in object detail page: %s", string(detailBody))
+	}
+
+	updateReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/update-object-mimetype", strings.NewReader(url.Values{
+		"_csrf":        {csrf},
+		"bucket":       {"mime-bucket"},
+		"key":          {"web/composeApp.wasm"},
+		"content_type": {"application/wasm"},
+	}.Encode()))
+	updateReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	updateResp, err := client.Do(updateReq)
+	if err != nil {
+		t.Fatalf("update mime type request failed: %v", err)
+	}
+	updateBody, _ := io.ReadAll(updateResp.Body)
+	_ = updateResp.Body.Close()
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected update mime type final status 200, got %d body=%q", updateResp.StatusCode, string(updateBody))
+	}
+	if !strings.Contains(string(updateBody), "application/wasm") {
+		t.Fatalf("expected updated mime type in object detail page: %q", string(updateBody))
+	}
+
+	updatedObj, err := mstore.GetLatestObjectVersion(context.Background(), "mime-bucket", "web/composeApp.wasm")
+	if err != nil {
+		t.Fatalf("get updated object metadata failed: %v", err)
+	}
+	if got := updatedObj.Metadata["content-type"]; got != "application/wasm" {
+		t.Fatalf("expected content-type application/wasm, got %q", got)
 	}
 }
 
