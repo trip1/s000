@@ -28,7 +28,7 @@ You can override these values by exporting env vars before running `make release
 
 ## GitHub Releases
 
-CI publishes versioned release assets when a tag matching `v*` is pushed.
+CI publishes versioned release assets when a tag matching `v*` is pushed, when a GitHub Release is published, or when the workflow is run manually with a `v*` version input.
 
 For a tag such as `v0.1.0`, the release job uploads:
 
@@ -41,6 +41,8 @@ For a tag such as `v0.1.0`, the release job uploads:
 - `checksums.txt`
 
 Branch and pull request builds still produce CI artifacts, named with `ci-<shortsha>`, but do not publish GitHub Releases.
+
+If a release already exists without assets, run the `ci` workflow manually from GitHub Actions and set `version` to the release tag, for example `v0.1.0`.
 
 ## Reproducibility
 

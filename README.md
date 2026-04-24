@@ -13,21 +13,32 @@ Current status: Release 1 implementation is substantially complete, including AP
 - Teams that want a self-hosted object store for dev environments, labs, edge nodes, or internal services.
 - Operators who prefer simple deployment and direct control over storage/data layout.
 
-## Install Latest Release
-- Install latest release (Linux with `systemd`/OpenRC service auto-detected; FreeBSD binary install supported):
-  - `curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash`
+## Quickstart
 
-For full deployment and production setup, see `docs/quickstart.md`.
-Installer options and init-system details are documented in `install.sh --help`.
+Install the latest release on a Linux or FreeBSD machine:
 
-## 5-Minute Source Quickstart
-- Export bootstrap credentials:
-  - `export S000_ADMIN_ACCESS_KEY=admin`
-  - `export S000_ADMIN_SECRET_KEY=secret`
-- Start server: `go run ./cmd/s000`
-- Verify service: `curl -fsS http://127.0.0.1:9000/healthz && curl -fsS http://127.0.0.1:9000/readyz`
-- Open UI: `http://127.0.0.1:9000/app/login`
-- Run CLI health check: `go run ./cmd/s000ctl health-inspect --endpoint http://127.0.0.1:9000`
+```bash
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash -s -- \
+  --access-key admin \
+  --secret-key 'change-me-before-production'
+```
+
+The installer downloads the matching release artifact, verifies `checksums.txt`, installs `s000`, creates the service user/data directory, and configures a service when `systemd` or OpenRC is available.
+
+Verify the service:
+
+```bash
+curl -fsS http://127.0.0.1:9000/healthz
+curl -fsS http://127.0.0.1:9000/readyz
+```
+
+Open the web UI and log in with the access key and secret key used during install:
+
+```text
+http://127.0.0.1:9000/app/login
+```
+
+For production, replace the example credentials with strong secrets before first start. Full deployment and production setup: `docs/quickstart.md`. Installer options and init-system details: `install.sh --help`.
 
 ## Project Status and Scope
 - Stability: pre-`v1`; APIs may evolve as compatibility and operational hardening continue.
@@ -43,7 +54,7 @@ Installer options and init-system details are documented in `install.sh --help`.
 - Contribution workflow and local validation commands: `CONTRIBUTING.md`.
 - Additional contributor notes: `docs/contributing.md`.
 
-## Quickstart
+## Development Commands
 - Set local admin bootstrap credentials (used by API auth and UI login):
   - `export S000_ADMIN_ACCESS_KEY=admin`
   - `export S000_ADMIN_SECRET_KEY=secret`
