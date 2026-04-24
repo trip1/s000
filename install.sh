@@ -196,29 +196,61 @@ calc_sha256() {
   die "no SHA-256 tool available (sha256sum/shasum/openssl)"
 }
 
+release_asset_digest() {
+  local asset_name api_url
+  asset_name="$1"
+  api_url="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}"
+
+  curl -fsSL "${api_url}" | awk -v f="${asset_name}" '
+    index($0, "\"name\": \"" f "\"") { found=1 }
+    found && index($0, "\"digest\": \"sha256:") {
+      sub(/^.*"sha256:/, "")
+      sub(/".*$/, "")
+      print
+      exit
+    }
+  '
+}
+
 download_release() {
   TMP_DIR="$(mktemp -d)"
   trap 'rm -rf "${TMP_DIR}"' EXIT
 
-  ARCHIVE_NAME="s000-${RELEASE_TAG}-${GOOS}-${GOARCH}.tar.gz"
   BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
-  ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
+  ARCHIVE_NAME=""
   CHECKSUMS_PATH="${TMP_DIR}/checksums.txt"
 
-  log "downloading ${ARCHIVE_NAME}"
-  curl -fL --retry 3 --retry-delay 1 -o "${ARCHIVE_PATH}" "${BASE_URL}/${ARCHIVE_NAME}"
-  curl -fL --retry 3 --retry-delay 1 -o "${CHECKSUMS_PATH}" "${BASE_URL}/checksums.txt"
+  for candidate in "s000-${RELEASE_TAG}-${GOOS}-${GOARCH}.tar.gz" "s000-${GOOS}-${GOARCH}.tar.gz"; do
+    ARCHIVE_PATH="${TMP_DIR}/${candidate}"
+    log "downloading ${candidate}"
+    if curl -fL --retry 3 --retry-delay 1 -o "${ARCHIVE_PATH}" "${BASE_URL}/${candidate}"; then
+      ARCHIVE_NAME="${candidate}"
+      break
+    fi
+  done
+
+  [[ -n "${ARCHIVE_NAME}" ]] || die "no release artifact found for ${GOOS}/${GOARCH} in ${RELEASE_TAG}"
 
   local expected actual
-  expected="$(awk -v f="${ARCHIVE_NAME}" '{ name=$2; sub(/^\.\//, "", name); if (name == f) { print $1 } }' "${CHECKSUMS_PATH}")"
-  [[ -n "${expected}" ]] || die "missing checksum for ${ARCHIVE_NAME}"
+  if curl -fL --retry 3 --retry-delay 1 -o "${CHECKSUMS_PATH}" "${BASE_URL}/checksums.txt"; then
+    expected="$(awk -v f="${ARCHIVE_NAME}" '{ name=$2; sub(/^\.\//, "", name); if (name == f) { print $1 } }' "${CHECKSUMS_PATH}")"
+    [[ -n "${expected}" ]] || die "missing checksum for ${ARCHIVE_NAME}"
+  else
+    expected="$(release_asset_digest "${ARCHIVE_NAME}")"
+    [[ -n "${expected}" ]] || die "missing checksum/digest for ${ARCHIVE_NAME}"
+  fi
 
   actual="$(calc_sha256 "${ARCHIVE_PATH}")"
   [[ "${actual}" == "${expected}" ]] || die "checksum mismatch for ${ARCHIVE_NAME}"
 
   tar -xzf "${ARCHIVE_PATH}" -C "${TMP_DIR}"
-  STAGE_DIR="${TMP_DIR}/s000-${RELEASE_TAG}-${GOOS}-${GOARCH}"
-  [[ -d "${STAGE_DIR}" ]] || die "release archive layout unexpected"
+  for candidate_dir in "${TMP_DIR}/s000-${RELEASE_TAG}-${GOOS}-${GOARCH}" "${TMP_DIR}/s000-${GOOS}-${GOARCH}"; do
+    if [[ -d "${candidate_dir}" ]]; then
+      STAGE_DIR="${candidate_dir}"
+      break
+    fi
+  done
+  [[ -n "${STAGE_DIR:-}" ]] || die "release archive layout unexpected"
 }
 
 install_binary() {
