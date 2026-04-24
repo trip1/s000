@@ -210,7 +210,7 @@ download_release() {
   curl -fL --retry 3 --retry-delay 1 -o "${CHECKSUMS_PATH}" "${BASE_URL}/checksums.txt"
 
   local expected actual
-  expected="$(awk -v f="${ARCHIVE_NAME}" '$2 == f { print $1 }' "${CHECKSUMS_PATH}")"
+  expected="$(awk -v f="${ARCHIVE_NAME}" '{ name=$2; sub(/^\.\//, "", name); if (name == f) { print $1 } }' "${CHECKSUMS_PATH}")"
   [[ -n "${expected}" ]] || die "missing checksum for ${ARCHIVE_NAME}"
 
   actual="$(calc_sha256 "${ARCHIVE_PATH}")"

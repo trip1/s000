@@ -16,10 +16,15 @@ cross-build:
 		for goarch in $(TARGET_ARCHES); do \
 			ext=""; \
 			if [ "$$goos" = "windows" ]; then ext=".exe"; fi; \
-			out="$(DIST_DIR)/bin/s000-$$goos-$$goarch$$ext"; \
+			name="s000-$$goos-$$goarch"; \
+			stage="$(DIST_DIR)/bin/$$name"; \
+			out="$$stage/s000$$ext"; \
+			rm -rf "$$stage"; \
+			mkdir -p "$$stage"; \
 			echo "building $$out"; \
 			CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" \
 				go build -trimpath -ldflags='-s -w -buildid=' -o "$$out" ./cmd/s000; \
+			tar -C "$(DIST_DIR)/bin" -czf "$(DIST_DIR)/bin/$$name.tar.gz" "$$name"; \
 		done; \
 	done
 
