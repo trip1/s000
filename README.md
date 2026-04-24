@@ -13,9 +13,14 @@ Current status: Release 1 implementation is substantially complete, including AP
 - Teams that want a self-hosted object store for dev environments, labs, edge nodes, or internal services.
 - Operators who prefer simple deployment and direct control over storage/data layout.
 
-## 5-Minute Quickstart
-- Install latest release (Linux/FreeBSD, system service auto-detected):
-  - `curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash`
+## Install Latest Release
+- Install latest release (Linux with `systemd`/OpenRC service auto-detected; FreeBSD binary install supported):
+  - `curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash`
+
+For full deployment and production setup, see `docs/quickstart.md`.
+Installer options and init-system details are documented in `install.sh --help`.
+
+## 5-Minute Source Quickstart
 - Export bootstrap credentials:
   - `export S000_ADMIN_ACCESS_KEY=admin`
   - `export S000_ADMIN_SECRET_KEY=secret`
@@ -23,9 +28,6 @@ Current status: Release 1 implementation is substantially complete, including AP
 - Verify service: `curl -fsS http://127.0.0.1:9000/healthz && curl -fsS http://127.0.0.1:9000/readyz`
 - Open UI: `http://127.0.0.1:9000/app/login`
 - Run CLI health check: `go run ./cmd/s000ctl health-inspect --endpoint http://127.0.0.1:9000`
-
-For full deployment and production setup, see `docs/quickstart.md`.
-Installer options and init-system details are documented in `install.sh --help`.
 
 ## Project Status and Scope
 - Stability: pre-`v1`; APIs may evolve as compatibility and operational hardening continue.

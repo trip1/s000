@@ -26,6 +26,22 @@ Defaults:
 
 You can override these values by exporting env vars before running `make release-artifacts`.
 
+## GitHub Releases
+
+CI publishes versioned release assets when a tag matching `v*` is pushed.
+
+For a tag such as `v0.1.0`, the release job uploads:
+
+- `s000-v0.1.0-linux-amd64.tar.gz`
+- `s000-v0.1.0-linux-arm64.tar.gz`
+- `s000-v0.1.0-freebsd-amd64.tar.gz`
+- `s000-v0.1.0-freebsd-arm64.tar.gz`
+- `s000-v0.1.0-darwin-amd64.tar.gz`
+- `s000-v0.1.0-darwin-arm64.tar.gz`
+- `checksums.txt`
+
+Branch and pull request builds still produce CI artifacts, named with `ci-<shortsha>`, but do not publish GitHub Releases.
+
 ## Reproducibility
 
 Build reproducibility is enforced by:

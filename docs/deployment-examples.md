@@ -83,9 +83,9 @@ It can:
 Examples:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash
-curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash -s -- --version v0.1.0 --init systemd
-curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash -s -- --init openrc --access-key admin --secret-key 'change-me'
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash -s -- --version v0.1.0 --init systemd
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/master/install.sh | sudo bash -s -- --init openrc --access-key admin --secret-key 'change-me'
 ```
 
 See full options with:
