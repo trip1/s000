@@ -716,6 +716,10 @@ body[data-page="dashboard"] .hud-panel::after {
   pointer-events: none;
 }
 
+body[data-page="dashboard"] .telemetry-panel {
+  animation: none;
+}
+
 body[data-page="dashboard"] .panel-heading {
   display: flex;
   justify-content: space-between;
