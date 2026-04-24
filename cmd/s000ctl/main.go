@@ -40,6 +40,8 @@ func run(args []string, out io.Writer, errOut io.Writer) int {
 		return runTokenCreate(args[1:], out, errOut)
 	case "put-object":
 		return runPutObject(args[1:], out, errOut)
+	case "presign-url":
+		return runPresignURL(args[1:], out, errOut)
 	case "completion":
 		return runCompletion(args[1:], out, errOut)
 	default:
@@ -61,6 +63,7 @@ Commands:
   health-inspect     Check /healthz and /readyz on one endpoint
   token-create       Create personal access token
   put-object         Upload object with bearer token
+  presign-url        Generate SigV4 presigned object URL
   completion         Print shell completion script snippet
   help               Show this help
 
@@ -70,6 +73,7 @@ Examples:
   s000ctl health-inspect --endpoint http://127.0.0.1:9000
   s000ctl token-create --subject cli --ttl 24h
   s000ctl put-object --endpoint http://127.0.0.1:9000 --bucket my-bucket --key hello.txt --file ./hello.txt --token <token>
+  s000ctl presign-url --endpoint http://127.0.0.1:9000 --bucket my-bucket --key hello.txt --method GET --expires 15m
   s000ctl completion --shell bash
 `)
 }
@@ -247,6 +251,70 @@ func runPutObject(args []string, out io.Writer, errOut io.Writer) int {
 	return 0
 }
 
+func runPresignURL(args []string, out io.Writer, errOut io.Writer) int {
+	fs := flag.NewFlagSet("presign-url", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	endpoint := "http://127.0.0.1:9000"
+	bucket := ""
+	key := ""
+	method := http.MethodGet
+	expires := 15 * time.Minute
+	accessKey := strings.TrimSpace(os.Getenv("S000_ADMIN_ACCESS_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("S000_ADMIN_SECRET_KEY"))
+	region := "us-east-1"
+	fs.StringVar(&endpoint, "endpoint", endpoint, "service endpoint URL")
+	fs.StringVar(&bucket, "bucket", bucket, "bucket name")
+	fs.StringVar(&key, "key", key, "object key")
+	fs.StringVar(&method, "method", method, "HTTP method (GET|PUT|HEAD|DELETE)")
+	fs.DurationVar(&expires, "expires", expires, "URL validity duration (max 168h)")
+	fs.StringVar(&accessKey, "access-key", accessKey, "access key ID (defaults to S000_ADMIN_ACCESS_KEY)")
+	fs.StringVar(&secretKey, "secret-key", secretKey, "secret access key (defaults to S000_ADMIN_SECRET_KEY)")
+	fs.StringVar(&region, "region", region, "AWS region in signing scope")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimSpace(key)
+	method = strings.ToUpper(strings.TrimSpace(method))
+	accessKey = strings.TrimSpace(accessKey)
+	secretKey = strings.TrimSpace(secretKey)
+	region = strings.TrimSpace(region)
+	if bucket == "" || key == "" || accessKey == "" || secretKey == "" {
+		_, _ = fmt.Fprintln(errOut, "presign-url failed: bucket, key, access-key, and secret-key are required")
+		return 2
+	}
+	switch method {
+	case http.MethodGet, http.MethodPut, http.MethodHead, http.MethodDelete:
+	default:
+		_, _ = fmt.Fprintln(errOut, "presign-url failed: method must be GET, PUT, HEAD, or DELETE")
+		return 2
+	}
+
+	objectURL := strings.TrimRight(endpoint, "/") + "/" + url.PathEscape(bucket) + "/" + escapeObjectKey(key)
+	req, err := http.NewRequest(method, objectURL, nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "presign-url failed: %v\n", err)
+		return 1
+	}
+
+	err = auth.PresignRequest(req, accessKey, secretKey, auth.PresignOptions{
+		Region:  region,
+		Service: "s3",
+		Expires: expires,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "presign-url failed: %v\n", err)
+		return 1
+	}
+
+	_, _ = fmt.Fprintln(out, req.URL.String())
+	return 0
+}
+
 func probeEndpoint(client *http.Client, endpoint, path string) error {
 	url := strings.TrimRight(endpoint, "/") + path
 	resp, err := client.Get(url)
@@ -282,16 +350,16 @@ func runCompletion(args []string, out io.Writer, errOut io.Writer) int {
 }
 
 func completionScript(shell string) (string, error) {
-	commands := "backup-create restore-validate health-inspect token-create put-object completion help"
+	commands := "backup-create restore-validate health-inspect token-create put-object presign-url completion help"
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "bash":
 		return fmt.Sprintf("complete -W \"%s\" s000ctl", commands), nil
 	case "zsh":
-		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect token-create put-object completion help))'", nil
+		return "#compdef s000ctl\n_arguments '1: :((backup-create restore-validate health-inspect token-create put-object presign-url completion help))'", nil
 	case "fish":
-		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect token-create put-object completion help\"", nil
+		return "complete -c s000ctl -f -a \"backup-create restore-validate health-inspect token-create put-object presign-url completion help\"", nil
 	case "powershell", "pwsh":
-		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','token-create','put-object','completion','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
+		return "Register-ArgumentCompleter -CommandName s000ctl -ScriptBlock { param($wordToComplete) 'backup-create','restore-validate','health-inspect','token-create','put-object','presign-url','completion','help' | Where-Object { $_ -like \"$wordToComplete*\" } }", nil
 	default:
 		return "", errors.New("unsupported shell")
 	}

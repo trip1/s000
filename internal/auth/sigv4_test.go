@@ -74,22 +74,40 @@ func TestVerifyRejectsClockSkew(t *testing.T) {
 	}
 }
 
-func TestVerifyPresignRejectsNonGetPutMethods(t *testing.T) {
+func TestVerifyPresignAllowsHeadRequests(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
 	v, _ := testVerifier(t, now)
 
-	req, err := http.NewRequest(http.MethodPost, "https://s000.local/bucket/key", nil)
+	req, err := http.NewRequest(http.MethodHead, "https://s000.local/bucket/key", nil)
 	if err != nil {
 		t.Fatalf("request creation failed: %v", err)
 	}
 
 	signPresignedURL(t, req, "AKIDEXAMPLE", "very-secret", now, "us-east-1", "s3", 120)
 
+	if err := v.VerifyRequest(req); err != nil {
+		t.Fatalf("expected valid presigned HEAD request, got %v", err)
+	}
+}
+
+func TestVerifyPresignRejectsExpiresOverSevenDays(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	v, _ := testVerifier(t, now)
+
+	req, err := http.NewRequest(http.MethodGet, "https://s000.local/bucket/key", nil)
+	if err != nil {
+		t.Fatalf("request creation failed: %v", err)
+	}
+
+	signPresignedURL(t, req, "AKIDEXAMPLE", "very-secret", now, "us-east-1", "s3", 604801)
+
 	err = v.VerifyRequest(req)
 	if err == nil {
-		t.Fatal("expected method rejection")
+		t.Fatal("expected expiry validation error")
 	}
 	if err != ErrInvalidRequest {
 		t.Fatalf("expected ErrInvalidRequest, got %v", err)

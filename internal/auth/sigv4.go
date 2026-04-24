@@ -129,10 +129,6 @@ func (v *Verifier) verifyHeaderAuth(r *http.Request) error {
 }
 
 func (v *Verifier) verifyPresignedURL(r *http.Request) error {
-	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		return ErrInvalidRequest
-	}
-
 	params := r.URL.Query()
 	if params.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" {
 		return ErrInvalidRequest
@@ -147,7 +143,7 @@ func (v *Verifier) verifyPresignedURL(r *http.Request) error {
 	}
 
 	expiresSeconds, err := strconv.Atoi(params.Get("X-Amz-Expires"))
-	if err != nil || expiresSeconds < 0 {
+	if err != nil || expiresSeconds <= 0 || expiresSeconds > 604800 {
 		return ErrInvalidRequest
 	}
 	if v.now().UTC().After(requestTime.Add(time.Duration(expiresSeconds) * time.Second)) {

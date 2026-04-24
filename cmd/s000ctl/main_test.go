@@ -25,7 +25,7 @@ func TestRunHelpIncludesCommandSurface(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d (%s)", exit, errOut.String())
 	}
 	text := out.String()
-	for _, command := range []string{"backup-create", "restore-validate", "health-inspect", "token-create", "put-object", "completion"} {
+	for _, command := range []string{"backup-create", "restore-validate", "health-inspect", "token-create", "put-object", "presign-url", "completion"} {
 		if !strings.Contains(text, command) {
 			t.Fatalf("expected help output to include %q, got %q", command, text)
 		}
@@ -214,5 +214,40 @@ func TestPutObjectUploadsWithBearerToken(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "uploaded hello.txt") {
 		t.Fatalf("expected upload success output, got %q", out.String())
+	}
+}
+
+func TestPresignURLGeneratesVerifiableURL(t *testing.T) {
+	t.Parallel()
+
+	store := auth.NewCredentialStore(func() time.Time { return time.Now().UTC() })
+	if err := store.CreateCredential("AKIDEXAMPLE", "very-secret"); err != nil {
+		t.Fatalf("failed to create credential: %v", err)
+	}
+	verifier := auth.NewVerifier(store, auth.VerifierOptions{Now: func() time.Time { return time.Now().UTC() }})
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	exit := run([]string{
+		"presign-url",
+		"--endpoint", "https://s000.local",
+		"--bucket", "photos",
+		"--key", "album/hello.txt",
+		"--method", "HEAD",
+		"--expires", "5m",
+		"--access-key", "AKIDEXAMPLE",
+		"--secret-key", "very-secret",
+	}, &out, &errOut)
+	if exit != 0 {
+		t.Fatalf("expected exit 0, got %d (%s)", exit, errOut.String())
+	}
+
+	signedURL := strings.TrimSpace(out.String())
+	req, err := http.NewRequest(http.MethodHead, signedURL, nil)
+	if err != nil {
+		t.Fatalf("request creation failed: %v", err)
+	}
+	if err := verifier.VerifyRequest(req); err != nil {
+		t.Fatalf("expected verifiable presigned URL, got %v", err)
 	}
 }

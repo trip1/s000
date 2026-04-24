@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"ds9labs.com/s000/internal/auth"
 	"ds9labs.com/s000/internal/blob"
 	"ds9labs.com/s000/internal/metadata"
 )
@@ -146,6 +149,56 @@ func TestDeleteBucketRequiresEmptyBucket(t *testing.T) {
 	resp := execute(t, h, http.MethodDelete, "/photos", "")
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("expected conflict for non-empty bucket delete, got %d", resp.StatusCode)
+	}
+}
+
+func TestPresignedURLSupportsPutAndGetObject(t *testing.T) {
+	t.Parallel()
+
+	broot := t.TempDir()
+	bstore, err := blob.NewStore(blob.Config{RootDir: broot, FsyncMode: blob.FsyncFast})
+	if err != nil {
+		t.Fatalf("new blob store failed: %v", err)
+	}
+
+	mstore, err := metadata.NewStore(metadata.Config{Backend: metadata.BackendSQLite, DSN: "file:test.db"})
+	if err != nil {
+		t.Fatalf("new metadata store failed: %v", err)
+	}
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "photos", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	credentials := auth.NewCredentialStore(func() time.Time { return now })
+	if err := credentials.CreateCredential("AKIDEXAMPLE", "very-secret"); err != nil {
+		t.Fatalf("create credential failed: %v", err)
+	}
+	verifier := auth.NewVerifier(credentials, auth.VerifierOptions{Now: func() time.Time { return now }})
+
+	h := NewHandler(Options{Verifier: verifier, Metadata: mstore, Blob: bstore, MaxInFlight: 128, HeavyOpsWorkers: 4, HeavyOpsQueue: 64, BucketRegion: "us-east-1"})
+
+	putReq := httptest.NewRequest(http.MethodPut, "/photos/presigned.txt", strings.NewReader("hello from presign"))
+	if err := auth.PresignRequest(putReq, "AKIDEXAMPLE", "very-secret", auth.PresignOptions{Now: func() time.Time { return now }, Region: "us-east-1", Service: "s3", Expires: 5 * time.Minute}); err != nil {
+		t.Fatalf("presign put failed: %v", err)
+	}
+	putRR := httptest.NewRecorder()
+	h.ServeHTTP(putRR, putReq)
+	if putRR.Code != http.StatusOK {
+		t.Fatalf("presigned put status=%d body=%s", putRR.Code, putRR.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/photos/presigned.txt", nil)
+	if err := auth.PresignRequest(getReq, "AKIDEXAMPLE", "very-secret", auth.PresignOptions{Now: func() time.Time { return now }, Region: "us-east-1", Service: "s3", Expires: 5 * time.Minute}); err != nil {
+		t.Fatalf("presign get failed: %v", err)
+	}
+	getRR := httptest.NewRecorder()
+	h.ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("presigned get status=%d body=%s", getRR.Code, getRR.Body.String())
+	}
+	if getRR.Body.String() != "hello from presign" {
+		t.Fatalf("unexpected presigned get body: %q", getRR.Body.String())
 	}
 }
 

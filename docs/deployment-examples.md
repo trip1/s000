@@ -70,6 +70,30 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now s000
 ```
 
+## Automated Install Script
+
+An installer is available at repository root: `install.sh`.
+
+It can:
+- install required download/runtime dependencies,
+- download the requested release artifact from GitHub,
+- install `s000` to `/usr/local/bin` (or custom path),
+- configure and start a service on supported init systems (`systemd`, `openrc`).
+
+Examples:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash -s -- --version v0.1.0 --init systemd
+curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash -s -- --init openrc --access-key admin --secret-key 'change-me'
+```
+
+See full options with:
+
+```bash
+sudo ./install.sh --help
+```
+
 ## Low-Resource Validation (2 CPU / 4GB RAM)
 
 Run:

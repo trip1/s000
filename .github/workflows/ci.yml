@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -174,14 +175,24 @@ jobs:
 
   artifacts:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
+      - name: Resolve artifact version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "value=ci-${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+          fi
       - name: Build release artifacts
         env:
-          VERSION: ci
+          VERSION: ${{ steps.version.outputs.value }}
           SOURCE_DATE_EPOCH: "0"
           DIST_DIR: dist
           TARGET_OSES: "linux freebsd darwin"
@@ -190,5 +201,26 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: s000-release-artifacts
+          name: s000-release-artifacts-${{ steps.version.outputs.value }}
           path: dist/artifacts/
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, unit, integration, metadata-backend-integration, build, artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: s000-release-artifacts-${{ needs.artifacts.outputs.version }}
+          path: dist/artifacts
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/artifacts/*.tar.gz
+            dist/artifacts/checksums.txt

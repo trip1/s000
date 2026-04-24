@@ -4,6 +4,43 @@ s000 is a self-hosted, S3-compatible object storage service in Go.
 
 Current status: Release 1 implementation is substantially complete, including API, CLI tooling, and embedded HTML client scaffolding.
 
+## Why s000
+- Run S3-compatible storage on a single node with simple local operations.
+- Keep deployment choices flexible with pluggable metadata backends (`sqlite`, `libsql`, `postgresql`, `mariadb`, `valkey`).
+- Operate with explicit controls: SigV4 auth, health/readiness probes, metrics, backup/restore workflows, and a built-in admin UI.
+
+## Who this is for
+- Teams that want a self-hosted object store for dev environments, labs, edge nodes, or internal services.
+- Operators who prefer simple deployment and direct control over storage/data layout.
+
+## 5-Minute Quickstart
+- Install latest release (Linux/FreeBSD, system service auto-detected):
+  - `curl -fsSL https://raw.githubusercontent.com/trip1/s000/main/install.sh | sudo bash`
+- Export bootstrap credentials:
+  - `export S000_ADMIN_ACCESS_KEY=admin`
+  - `export S000_ADMIN_SECRET_KEY=secret`
+- Start server: `go run ./cmd/s000`
+- Verify service: `curl -fsS http://127.0.0.1:9000/healthz && curl -fsS http://127.0.0.1:9000/readyz`
+- Open UI: `http://127.0.0.1:9000/app/login`
+- Run CLI health check: `go run ./cmd/s000ctl health-inspect --endpoint http://127.0.0.1:9000`
+
+For full deployment and production setup, see `docs/quickstart.md`.
+Installer options and init-system details are documented in `install.sh --help`.
+
+## Project Status and Scope
+- Stability: pre-`v1`; APIs may evolve as compatibility and operational hardening continue.
+- Non-health routes are protected by SigV4 verification middleware.
+- Primary scope is single-node operation and S3 compatibility for common workflows.
+- Known gaps and constraints are tracked in `docs/limitations.md`.
+
+## Security and Responsible Disclosure
+- Security policy and private reporting workflow: `SECURITY.md`.
+- Security hardening, threat model, and review artifacts: `docs/security-hardening-spec.md`, `docs/threat-model.md`, `docs/security-review-checklist.md`.
+
+## Contributing
+- Contribution workflow and local validation commands: `CONTRIBUTING.md`.
+- Additional contributor notes: `docs/contributing.md`.
+
 ## Quickstart
 - Set local admin bootstrap credentials (used by API auth and UI login):
   - `export S000_ADMIN_ACCESS_KEY=admin`
