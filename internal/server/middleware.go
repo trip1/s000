@@ -160,6 +160,12 @@ func withAuthGate(next http.Handler, opts Options) http.Handler {
 			return
 		}
 
+		if !hasAuthMaterial(r) && isPublicWebsiteRequest(r, opts) {
+			r = r.WithContext(withPrincipalContext(r.Context(), "anonymous"))
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		verifier := opts.Verifier
 		if verifier == nil {
 			writeS3Error(w, r, s3ErrorSpec{
@@ -193,6 +199,21 @@ func withAuthGate(next http.Handler, opts Options) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isPublicWebsiteRequest(r *http.Request, opts Options) bool {
+	if opts.Metadata == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return false
+	}
+	if _, ok := r.URL.Query()["website"]; ok {
+		return false
+	}
+	bucket, _, ok := bucketAndKey(r, opts.Domain)
+	if !ok || bucket == "" {
+		return false
+	}
+	cfg, err := opts.Metadata.GetBucketWebsite(r.Context(), bucket)
+	return err == nil && cfg.Enabled && cfg.PublicRead
 }
 
 func hasAuthMaterial(r *http.Request) bool {

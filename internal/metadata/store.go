@@ -120,6 +120,9 @@ func shouldUseNativeSQL(cfg Config) bool {
 }
 
 func requiresNativeMetadataStore(cfg Config) bool {
+	if cfg.Backend == BackendValkey {
+		return false
+	}
 	if strings.HasPrefix(strings.TrimSpace(cfg.DSN), "local://") {
 		return false
 	}

@@ -70,6 +70,17 @@ func TestCrossBackendCompatibilityCoreCRUD(t *testing.T) {
 	}
 }
 
+func TestValkeyBackendUsesCompatibilityStateStore(t *testing.T) {
+	t.Parallel()
+
+	if requiresNativeMetadataStore(Config{
+		Backend:    BackendValkey,
+		ValkeyAddr: "127.0.0.1:6379",
+	}) {
+		t.Fatal("expected valkey to use compatibility state store instead of requiring native row-level store")
+	}
+}
+
 func TestTransactionalCommitAndRollback(t *testing.T) {
 	t.Parallel()
 

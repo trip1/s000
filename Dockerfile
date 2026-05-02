@@ -1,17 +1,18 @@
 # syntax=docker/dockerfile:1.7
 
+ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 
-ARG TARGETOS
-ARG TARGETARCH
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 RUN test -f internal/server/web/static/app.css && test -f internal/server/web/static/app.js
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w -buildid=' -o /out/s000 ./cmd/s000
 
 FROM alpine:3.22

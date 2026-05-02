@@ -1110,7 +1110,7 @@ func (a *s3API) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, 
 			return
 		}
 		ref := blob.ObjectRef{Bucket: bucket, Key: key, VersionID: versionID}
-		blobMeta, err := a.writeMaybeEncryptedObject(r, ref, r.Body, encrypted)
+		blobMeta, err := a.writeMaybeEncryptedObject(r, ref, requestObjectBody(r), encrypted)
 		if err != nil {
 			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "Object write failed.", Resource: "/" + bucket + "/" + key})
 			return
@@ -1607,7 +1607,7 @@ func (a *s3API) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket,
 			return
 		}
 
-		meta, err := a.blob.WriteMultipartPart(r.Context(), uploadID, partNumber, r.Body)
+		meta, err := a.blob.WriteMultipartPart(r.Context(), uploadID, partNumber, requestObjectBody(r))
 		if err != nil {
 			writeS3Error(w, r, s3ErrorSpec{StatusCode: http.StatusInternalServerError, Code: "InternalError", Message: "Upload part failed.", Resource: "/" + bucket + "/" + key})
 			return

@@ -92,7 +92,7 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc(metricsPath, metricsHandler(opts))
 	mux.HandleFunc("/debug/lifecycle/config", lifecycleConfigDebug(opts))
 	mux.HandleFunc("/debug/lifecycle/metrics", lifecycleMetricsDebug(opts))
-	mux.HandleFunc("/", s3Handler(opts))
+	mux.HandleFunc("/", websiteOrS3Handler(opts))
 
 	return withMiddleware(mux, opts)
 }
@@ -159,6 +159,18 @@ func dependencyCheck(ctx context.Context, opts Options) error {
 func s3Handler(opts Options) http.HandlerFunc {
 	api := newS3API(opts)
 	return func(w http.ResponseWriter, r *http.Request) {
+		api.ServeHTTP(w, r)
+	}
+}
+
+func websiteOrS3Handler(opts Options) http.HandlerFunc {
+	api := newS3API(opts)
+	website := NewWebsiteHandlerWithSSE(opts.Metadata, opts.Blob, opts.Domain, opts.SSEMasterKey)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if isPublicWebsiteRequest(r, opts) {
+			website.ServeHTTP(w, r)
+			return
+		}
 		api.ServeHTTP(w, r)
 	}
 }
