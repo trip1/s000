@@ -9,11 +9,18 @@ This document tracks the baseline benchmark and profiling workflow for Release 1
   - `BenchmarkObjectIO/1KB`
   - `BenchmarkObjectIO/1MB`
   - `BenchmarkObjectIO/100MB`
+- Location: `internal/server/s3_api_bench_test.go`
+- End-to-end S3 API benchmarks:
+  - `BenchmarkS3APISmallObjectPutGet`
+  - `BenchmarkS3APIListObjectsV2Indexed`
 
 Run:
 
 ```bash
 make bench
+
+# Or run only API-level storage benchmarks:
+go test -bench='BenchmarkS3API' -run=^$ ./internal/server
 ```
 
 ## Profiling Harness

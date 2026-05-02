@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"log"
@@ -109,21 +110,19 @@ func main() {
 		log.Fatal(err)
 	}
 	var lifecycleWorker *lifecycle.Worker
-	if len(lifecycleRules) > 0 {
-		lifecycleWorker, err = lifecycle.NewWorker(lifecycle.Options{
-			Metadata:     metadataStore,
-			Blob:         blobStore,
-			Rules:        lifecycleRules,
-			Interval:     cfg.LifecycleInterval,
-			BatchSize:    cfg.LifecycleBatchSize,
-			MaxRetries:   cfg.LifecycleMaxRetries,
-			RetryBackoff: cfg.LifecycleBackoff,
-			DryRun:       cfg.LifecycleDryRun,
-			QueueDepthFn: metrics.SetWorkerQueueDepth,
-		})
-		if err != nil {
-			log.Fatal(err)
-		}
+	lifecycleWorker, err = lifecycle.NewWorker(lifecycle.Options{
+		Metadata:     metadataStore,
+		Blob:         blobStore,
+		Rules:        lifecycleRules,
+		Interval:     cfg.LifecycleInterval,
+		BatchSize:    cfg.LifecycleBatchSize,
+		MaxRetries:   cfg.LifecycleMaxRetries,
+		RetryBackoff: cfg.LifecycleBackoff,
+		DryRun:       cfg.LifecycleDryRun,
+		QueueDepthFn: metrics.SetWorkerQueueDepth,
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	appCtx, cancelWorkers := context.WithCancel(context.Background())
@@ -163,32 +162,41 @@ func main() {
 	if patSigningKey != "" {
 		patManager = auth.NewPersonalAccessTokenManager([]byte(patSigningKey), timeNow)
 	}
+	var sseMasterKey []byte
+	if cfg.SSEMasterKey != "" {
+		decoded, err := base64.StdEncoding.DecodeString(cfg.SSEMasterKey)
+		if err != nil || len(decoded) != 32 {
+			log.Fatal("S000_SSE_MASTER_KEY must be a base64-encoded 32-byte key")
+		}
+		sseMasterKey = decoded
+	}
 
-		handler := server.NewHandler(server.Options{
-		Domain:            cfg.Domain,
-		MaxInFlight:       cfg.MaxInFlight,
-		Verifier:          verifier,
-		PATSigningKey:     patSigningKey,
-		PATManager:        patManager,
-		Metadata:          metadataStore,
-		Blob:              blobStore,
-		Lifecycle:         lifecycleWorker,
-		Metrics:           metrics,
-		MetricsPath:       cfg.MetricsPath,
-		HeavyOpsWorkers:   cfg.HeavyOpsWorkers,
-		HeavyOpsQueue:     cfg.HeavyOpsQueue,
-		AuditEnabled:      true,
-		AuthFailThreshold: cfg.AuthFailThreshold,
-		AuthFailWindow:    cfg.AuthFailWindow,
-		AuthBlockDuration: cfg.AuthBlockDuration,
-		UIAccessKey:       cfg.AdminAccessKey,
-		UISecretKey:       cfg.AdminSecretKey,
-		UITheme:           cfg.UITheme,
+	handler := server.NewHandler(server.Options{
+		Domain:              cfg.Domain,
+		MaxInFlight:         cfg.MaxInFlight,
+		Verifier:            verifier,
+		PATSigningKey:       patSigningKey,
+		PATManager:          patManager,
+		Metadata:            metadataStore,
+		Blob:                blobStore,
+		Lifecycle:           lifecycleWorker,
+		Metrics:             metrics,
+		MetricsPath:         cfg.MetricsPath,
+		HeavyOpsWorkers:     cfg.HeavyOpsWorkers,
+		HeavyOpsQueue:       cfg.HeavyOpsQueue,
+		AuditEnabled:        true,
+		AuthFailThreshold:   cfg.AuthFailThreshold,
+		AuthFailWindow:      cfg.AuthFailWindow,
+		AuthBlockDuration:   cfg.AuthBlockDuration,
+		UIAccessKey:         cfg.AdminAccessKey,
+		UISecretKey:         cfg.AdminSecretKey,
+		UITheme:             cfg.UITheme,
 		UIDashboardStatsSSE: cfg.UIDashboardStatsSSE,
 		UIBucketsSSE:        cfg.UIBucketsSSE,
 		UITokensSSE:         cfg.UITokensSSE,
 		UIObjectsSSE:        cfg.UIObjectsSSE,
 		UIObjectMetadataSSE: cfg.UIObjectMetadataSSE,
+		SSEMasterKey:        sseMasterKey,
 		ReadyCheck: func(ctx context.Context) error {
 			return metadataConnections.Ping(ctx)
 		},
@@ -209,7 +217,7 @@ func main() {
 
 	var websiteServer *http.Server
 	if cfg.WebsiteEnabled {
-		websiteServer = server.NewHTTPServerWithOptions(cfg.WebsiteAddr, server.NewWebsiteHandler(metadataStore, blobStore, cfg.WebsiteDomain), server.HTTPServerOptions{
+		websiteServer = server.NewHTTPServerWithOptions(cfg.WebsiteAddr, server.NewWebsiteHandlerWithSSE(metadataStore, blobStore, cfg.WebsiteDomain, sseMasterKey), server.HTTPServerOptions{
 			ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 			ReadTimeout:       cfg.HTTPReadTimeout,
 			WriteTimeout:      cfg.HTTPWriteTimeout,

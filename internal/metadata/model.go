@@ -1,6 +1,9 @@
 package metadata
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Bucket stores bucket metadata.
 type Bucket struct {
@@ -18,18 +21,48 @@ type ObjectVersion struct {
 	Size           int64
 	ETag           string
 	ChecksumSHA256 string
+	ChecksumSHA1   string
+	ChecksumCRC32  string
+	ChecksumCRC32C string
 	StoragePath    string
 	Metadata       map[string]string
 	DeleteMarker   bool
 	CreatedAt      time.Time
 }
 
+// ListObjectsV2Options describes a backend-level S3 ListObjectsV2 page request.
+type ListObjectsV2Options struct {
+	Prefix     string
+	Delimiter  string
+	StartAfter string
+	MaxKeys    int
+}
+
+// ListObjectsV2Entry is either an object or a common prefix entry.
+type ListObjectsV2Entry struct {
+	Value  string
+	Object *ObjectVersion
+}
+
+// ListObjectsV2Result is one ordered listing page.
+type ListObjectsV2Result struct {
+	Entries     []ListObjectsV2Entry
+	IsTruncated bool
+	NextAfter   string
+}
+
+// ListObjectsV2Store is implemented by backends that can list with indexed seek pagination.
+type ListObjectsV2Store interface {
+	ListObjectsV2(ctx context.Context, bucket string, opts ListObjectsV2Options) (ListObjectsV2Result, error)
+}
+
 // MultipartUpload stores multipart upload metadata.
 type MultipartUpload struct {
-	UploadID    string
-	Bucket      string
-	Key         string
-	InitiatedAt time.Time
+	UploadID     string
+	Bucket       string
+	Key          string
+	SSEAlgorithm string
+	InitiatedAt  time.Time
 }
 
 // MultipartPart stores multipart part metadata.
@@ -39,6 +72,9 @@ type MultipartPart struct {
 	ETag           string
 	Size           int64
 	ChecksumSHA256 string
+	ChecksumSHA1   string
+	ChecksumCRC32  string
+	ChecksumCRC32C string
 	StoragePath    string
 	CreatedAt      time.Time
 }
@@ -110,6 +146,35 @@ type BucketPublicAccessBlock struct {
 	IgnorePublicACLs      bool
 	BlockPublicPolicy     bool
 	RestrictPublicBuckets bool
+}
+
+// BucketLifecycle stores a bucket lifecycle XML document.
+type BucketLifecycle struct {
+	Bucket   string
+	Document string
+	Enabled  bool
+}
+
+// BucketNotification stores a bucket notification XML document.
+type BucketNotification struct {
+	Bucket   string
+	Document string
+	Enabled  bool
+}
+
+// BucketReplication stores a bucket replication XML document.
+type BucketReplication struct {
+	Bucket   string
+	Document string
+	Enabled  bool
+}
+
+// ObjectTagging stores an object tagging XML document.
+type ObjectTagging struct {
+	Bucket    string
+	Key       string
+	VersionID string
+	Document  string
 }
 
 // ConsistencyIssue describes a metadata consistency failure.

@@ -1,7 +1,9 @@
 package lifecycle
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -90,4 +92,45 @@ func matchesAnyRule(rules []Rule, key string, age time.Duration) bool {
 		}
 	}
 	return false
+}
+
+// ParseLifecycleXMLRules parses the S3 LifecycleConfiguration expiration subset.
+func ParseLifecycleXMLRules(raw string) ([]Rule, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var in struct {
+		Rules []struct {
+			Status string `xml:"Status"`
+			Prefix string `xml:"Prefix"`
+			Filter struct {
+				Prefix string `xml:"Prefix"`
+			} `xml:"Filter"`
+			Expiration struct {
+				Days int `xml:"Days"`
+			} `xml:"Expiration"`
+		} `xml:"Rule"`
+	}
+	if err := xml.NewDecoder(strings.NewReader(raw)).Decode(&in); err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("parse lifecycle xml: %w", err)
+	}
+	rules := make([]Rule, 0, len(in.Rules))
+	for i, rule := range in.Rules {
+		if !strings.EqualFold(strings.TrimSpace(rule.Status), "Enabled") {
+			continue
+		}
+		if rule.Expiration.Days <= 0 {
+			return nil, fmt.Errorf("parse lifecycle xml rule %d: expiration days must be positive", i+1)
+		}
+		prefix := strings.TrimSpace(rule.Filter.Prefix)
+		if prefix == "" {
+			prefix = strings.TrimSpace(rule.Prefix)
+		}
+		rules = append(rules, Rule{Prefix: prefix, ExpireAfter: time.Duration(rule.Expiration.Days) * 24 * time.Hour})
+	}
+	return rules, nil
 }

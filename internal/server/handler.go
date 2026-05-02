@@ -51,6 +51,7 @@ type Options struct {
 	UIObjectsSSE         time.Duration
 	UIObjectMetadataSSE  time.Duration
 	BucketRegion         string
+	SSEMasterKey         []byte
 }
 
 // NewHandler builds the root HTTP handler and middleware stack.

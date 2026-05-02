@@ -244,10 +244,10 @@ func TestHTMXUIFolderFlowMatchesS3Browsing(t *testing.T) {
 	if !strings.Contains(string(objectsBody), "Folder breadcrumbs") {
 		t.Fatalf("expected breadcrumbs in objects page: %s", string(objectsBody))
 	}
-	if !strings.Contains(string(objectsBody), "Use current folder + filename") {
-		t.Fatalf("expected upload key prefill action in objects page: %s", string(objectsBody))
+	if !strings.Contains(string(objectsBody), "Drop files or folders") {
+		t.Fatalf("expected folder upload drop zone in objects page: %s", string(objectsBody))
 	}
-	if !strings.Contains(string(objectsBody), "prefix=photos%2F") {
+	if !strings.Contains(string(objectsBody), "prefix=photos/") {
 		t.Fatalf("expected parent breadcrumb link in objects page: %s", string(objectsBody))
 	}
 	if !strings.Contains(string(objectsBody), "photos/2026/") {
@@ -266,8 +266,24 @@ func TestHTMXUIFolderFlowMatchesS3Browsing(t *testing.T) {
 	if !strings.Contains(string(partialBody), "photos/2026/guide.txt") {
 		t.Fatalf("expected file inside folder listing before delete, got %q", string(partialBody))
 	}
+	if !strings.Contains(string(partialBody), `/app/buckets/folders-bucket/objects/photos/2026/guide.txt`) {
+		t.Fatalf("expected S3-style object detail link with slash separators, got %q", string(partialBody))
+	}
+	if strings.Contains(string(partialBody), `objects/photos%2F2026%2Fguide.txt`) {
+		t.Fatalf("expected object detail link not to escape folder separators, got %q", string(partialBody))
+	}
 	if strings.Contains(string(partialBody), "Delete marker") {
 		t.Fatalf("expected S3-style folder view to hide marker rows, got %q", string(partialBody))
+	}
+
+	detailResp, err := client.Get(ts.URL + "/app/buckets/folders-bucket/objects/photos/2026/guide.txt")
+	if err != nil {
+		t.Fatalf("get nested object detail failed: %v", err)
+	}
+	detailBody, _ := io.ReadAll(detailResp.Body)
+	_ = detailResp.Body.Close()
+	if detailResp.StatusCode != http.StatusOK || !strings.Contains(string(detailBody), "photos/2026/guide.txt") {
+		t.Fatalf("expected nested object detail page, status=%d body=%q", detailResp.StatusCode, string(detailBody))
 	}
 
 	parentPartialResp, err := client.Get(ts.URL + "/app/partials/objects?bucket=folders-bucket&prefix=photos/&delimiter=/")
@@ -427,6 +443,9 @@ func TestHTMXUIUploadsPageSupportsMultiFileUpload(t *testing.T) {
 	fileC, _ := writer.CreateFormFile("files", "c.txt")
 	_, _ = fileC.Write([]byte("gamma"))
 	_ = writer.WriteField("file_key", "folder/nested/c.txt")
+	fileD, _ := writer.CreateFormFile("files", "d.txt")
+	_, _ = fileD.Write([]byte("delta"))
+	_ = writer.WriteField("file_key", "album/folder/nested/d.txt")
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close multipart writer failed: %v", err)
 	}
@@ -442,7 +461,7 @@ func TestHTMXUIUploadsPageSupportsMultiFileUpload(t *testing.T) {
 	if uploadResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected upload redirect landing status 200, got %d body=%q", uploadResp.StatusCode, string(uploadRespBody))
 	}
-	if !strings.Contains(string(uploadRespBody), "uploaded&#43;3&#43;files") {
+	if !strings.Contains(string(uploadRespBody), "uploaded&#43;4&#43;files") {
 		t.Fatalf("expected multi upload flash message in uploads page, got %q", string(uploadRespBody))
 	}
 
@@ -466,6 +485,81 @@ func TestHTMXUIUploadsPageSupportsMultiFileUpload(t *testing.T) {
 	}
 	if objC.Size != 5 {
 		t.Fatalf("unexpected size for batch/folder/nested/c.txt: %d", objC.Size)
+	}
+	objD, err := mstore.GetLatestObjectVersion(context.Background(), "uploads-bucket", "batch/album/folder/nested/d.txt")
+	if err != nil {
+		t.Fatalf("expected uploaded key batch/album/folder/nested/d.txt, got error: %v", err)
+	}
+	if objD.Size != 5 {
+		t.Fatalf("unexpected size for batch/album/folder/nested/d.txt: %d", objD.Size)
+	}
+}
+
+func TestHTMXUIUploadObjectSupportsCurrentFolderPrefix(t *testing.T) {
+	t.Parallel()
+
+	bstore, mstore := newUIStores(t)
+	if err := mstore.CreateBucket(context.Background(), metadata.Bucket{Name: "prefix-upload-bucket", CreatedAt: time.Now().UTC(), Region: "us-east-1", VersioningStatus: "Suspended"}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	h := server.NewHandler(server.Options{Metadata: mstore, Blob: bstore, UIAccessKey: "admin", UISecretKey: "secret"})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/app/login", url.Values{"access_key": {"admin"}, "secret_key": {"secret"}})
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	_ = loginResp.Body.Close()
+
+	objectsResp, err := client.Get(ts.URL + "/app/buckets/prefix-upload-bucket/objects?prefix=site/assets/&delimiter=/")
+	if err != nil {
+		t.Fatalf("get objects page failed: %v", err)
+	}
+	objectsPage, _ := io.ReadAll(objectsResp.Body)
+	_ = objectsResp.Body.Close()
+	csrf := extractToken(string(objectsPage))
+	if csrf == "" {
+		t.Fatalf("failed to find csrf token in objects page: %s", string(objectsPage))
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("_csrf", csrf)
+	_ = writer.WriteField("bucket", "prefix-upload-bucket")
+	_ = writer.WriteField("prefix", "site/assets/")
+	_ = writer.WriteField("delimiter", "/")
+	_ = writer.WriteField("key", "app.css")
+	file, _ := writer.CreateFormFile("file", "app.css")
+	_, _ = file.Write([]byte("body{color:#111}"))
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer failed: %v", err)
+	}
+
+	uploadReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/app/actions/upload-object", body)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadResp, err := client.Do(uploadReq)
+	if err != nil {
+		t.Fatalf("upload request failed: %v", err)
+	}
+	_, _ = io.ReadAll(uploadResp.Body)
+	_ = uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected upload redirect landing status 200, got %d", uploadResp.StatusCode)
+	}
+
+	obj, err := mstore.GetLatestObjectVersion(context.Background(), "prefix-upload-bucket", "site/assets/app.css")
+	if err != nil {
+		t.Fatalf("expected uploaded key site/assets/app.css, got error: %v", err)
+	}
+	if obj.Size != 16 {
+		t.Fatalf("unexpected size for site/assets/app.css: %d", obj.Size)
+	}
+	if _, err := mstore.GetLatestObjectVersion(context.Background(), "prefix-upload-bucket", "app.css"); !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("expected root app.css to be absent, got err=%v", err)
 	}
 }
 

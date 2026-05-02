@@ -21,6 +21,7 @@ type metadataStore interface {
 	ListBuckets(ctx context.Context) ([]metadata.Bucket, error)
 	ListObjects(ctx context.Context, bucket string) ([]metadata.ObjectVersion, error)
 	DeleteAllObjectVersions(ctx context.Context, bucket string, key string) ([]metadata.ObjectVersion, error)
+	GetBucketLifecycle(ctx context.Context, bucket string) (metadata.BucketLifecycle, error)
 }
 
 type blobStore interface {
@@ -100,9 +101,6 @@ func NewWorker(opts Options) (*Worker, error) {
 	if !opts.DryRun && opts.Blob == nil {
 		return nil, fmt.Errorf("blob store is required when dry-run is disabled")
 	}
-	if len(opts.Rules) == 0 {
-		return nil, fmt.Errorf("at least one lifecycle rule is required")
-	}
 	if opts.Interval <= 0 {
 		opts.Interval = defaultInterval
 	}
@@ -174,6 +172,21 @@ func (w *Worker) RunOnce(ctx context.Context) (Report, error) {
 	candidates := make([]metadata.ObjectVersion, 0)
 	now := w.now()
 	for _, bucket := range buckets {
+		bucketRules := append([]Rule(nil), w.rules...)
+		if cfg, cfgErr := w.metadata.GetBucketLifecycle(ctx, bucket.Name); cfgErr == nil && cfg.Enabled {
+			parsed, parseErr := ParseLifecycleXMLRules(cfg.Document)
+			if parseErr != nil {
+				report.Failed++
+				continue
+			}
+			bucketRules = append(bucketRules, parsed...)
+		} else if cfgErr != nil && !errors.Is(cfgErr, metadata.ErrNotFound) {
+			report.Failed++
+			continue
+		}
+		if len(bucketRules) == 0 {
+			continue
+		}
 		objects, listErr := w.metadata.ListObjects(ctx, bucket.Name)
 		if listErr != nil {
 			report.Failed++
@@ -185,7 +198,7 @@ func (w *Worker) RunOnce(ctx context.Context) (Report, error) {
 			if age < 0 {
 				continue
 			}
-			if matchesAnyRule(w.rules, obj.Key, age) {
+			if matchesAnyRule(bucketRules, obj.Key, age) {
 				report.Eligible++
 				candidates = append(candidates, obj)
 			}

@@ -109,6 +109,37 @@ func TestRunOnceDryRunSkipsDeletes(t *testing.T) {
 	}
 }
 
+func TestRunOnceUsesBucketLifecycleXML(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+	store, bstore := newLifecycleStores(t)
+	seedObject(t, ctx, store, bstore, "photos", "logs/old.txt", "v1", now.Add(-48*time.Hour))
+	seedObject(t, ctx, store, bstore, "photos", "logs/new.txt", "v2", now.Add(-6*time.Hour))
+	if err := store.PutBucketLifecycle(ctx, metadata.BucketLifecycle{Bucket: "photos", Enabled: true, Document: `<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`}); err != nil {
+		t.Fatalf("put lifecycle failed: %v", err)
+	}
+
+	worker, err := NewWorker(Options{Metadata: store, Blob: bstore, DryRun: false, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("new worker failed: %v", err)
+	}
+	report, err := worker.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run once failed: %v", err)
+	}
+	if report.Eligible != 1 || report.Deleted != 1 {
+		t.Fatalf("expected one lifecycle XML deletion, got report %+v", report)
+	}
+	if _, err := store.GetLatestObjectVersion(ctx, "photos", "logs/old.txt"); !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("expected old object deleted, got %v", err)
+	}
+	if _, err := store.GetLatestObjectVersion(ctx, "photos", "logs/new.txt"); err != nil {
+		t.Fatalf("expected new object to remain, got %v", err)
+	}
+}
+
 func TestRunOnceRetriesTransientDeleteFailure(t *testing.T) {
 	t.Parallel()
 

@@ -41,7 +41,7 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 func TestLoadFromEnvUsesDataDirForDefaultMetadataDSN(t *testing.T) {
 	t.Parallel()
 
-		env := map[string]string{
+	env := map[string]string{
 		"S000_DATA_DIR": "/srv/s000-data",
 	}
 	cfg := LoadFromEnv(func(key string) string { return env[key] })
@@ -54,27 +54,28 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
-		"S000_ADDR":                     ":19000",
-		"S000_DATA_DIR":                 "/srv/s000",
-		"S000_IMPORT_DIRECTORY":         "/srv/import",
-		"S000_METADATA_BACKEND":         "postgresql",
-		"S000_METADATA_DSN":             "postgres://localhost/s000",
-		"S000_TRACING_ENABLED":          "true",
-		"S000_METRICS_PATH":             "/internal/metrics",
-		"S000_HTTP_READ_TIMEOUT":        "45s",
-		"S000_AUTH_FAIL_THRESHOLD":      "10",
-		"S000_PAT_SIGNING_KEY":          "pat-key",
-		"S000_UI_THEME":                 "solarized",
+		"S000_ADDR":                            ":19000",
+		"S000_DATA_DIR":                        "/srv/s000",
+		"S000_IMPORT_DIRECTORY":                "/srv/import",
+		"S000_METADATA_BACKEND":                "postgresql",
+		"S000_METADATA_DSN":                    "postgres://localhost/s000",
+		"S000_TRACING_ENABLED":                 "true",
+		"S000_METRICS_PATH":                    "/internal/metrics",
+		"S000_HTTP_READ_TIMEOUT":               "45s",
+		"S000_AUTH_FAIL_THRESHOLD":             "10",
+		"S000_PAT_SIGNING_KEY":                 "pat-key",
+		"S000_UI_THEME":                        "solarized",
 		"S000_UI_SSE_DASHBOARD_STATS_INTERVAL": "3s",
 		"S000_UI_SSE_BUCKETS_INTERVAL":         "11s",
 		"S000_UI_SSE_TOKENS_INTERVAL":          "12s",
 		"S000_UI_SSE_OBJECTS_INTERVAL":         "13s",
 		"S000_UI_SSE_OBJECT_METADATA_INTERVAL": "14s",
-		"S000_WEBSITE_ENABLED":          "true",
-		"S000_WEBSITE_ADDR":             ":9100",
-		"S000_WEBSITE_DOMAIN":           "example.test",
-		"S000_SHUTDOWN_TIMEOUT":         "25s",
-		"S000_METADATA_CONNECT_TIMEOUT": "4s",
+		"S000_SSE_MASTER_KEY":                  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		"S000_WEBSITE_ENABLED":                 "true",
+		"S000_WEBSITE_ADDR":                    ":9100",
+		"S000_WEBSITE_DOMAIN":                  "example.test",
+		"S000_SHUTDOWN_TIMEOUT":                "25s",
+		"S000_METADATA_CONNECT_TIMEOUT":        "4s",
 	}
 	cfg := LoadFromEnv(func(key string) string { return env[key] })
 
@@ -107,6 +108,9 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.UIDashboardStatsSSE != 3*time.Second || cfg.UIBucketsSSE != 11*time.Second || cfg.UITokensSSE != 12*time.Second || cfg.UIObjectsSSE != 13*time.Second || cfg.UIObjectMetadataSSE != 14*time.Second {
 		t.Fatalf("unexpected ui sse interval overrides: stats=%s buckets=%s tokens=%s objects=%s metadata=%s", cfg.UIDashboardStatsSSE, cfg.UIBucketsSSE, cfg.UITokensSSE, cfg.UIObjectsSSE, cfg.UIObjectMetadataSSE)
+	}
+	if cfg.SSEMasterKey != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
+		t.Fatalf("expected sse master key override, got %q", cfg.SSEMasterKey)
 	}
 	if !cfg.WebsiteEnabled || cfg.WebsiteAddr != ":9100" || cfg.WebsiteDomain != "example.test" {
 		t.Fatalf("unexpected website overrides: %#v", cfg)

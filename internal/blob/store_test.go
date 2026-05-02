@@ -201,6 +201,40 @@ func TestReadObjectSupportsRanges(t *testing.T) {
 	}
 }
 
+func TestPromoteMultipartPartCommitsWithoutRecopy(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	s, err := NewStore(Config{RootDir: root, FsyncMode: FsyncFast})
+	if err != nil {
+		t.Fatalf("new store failed: %v", err)
+	}
+
+	ctx := context.Background()
+	part, err := s.WriteMultipartPart(ctx, "u1", 1, strings.NewReader("hello multipart"))
+	if err != nil {
+		t.Fatalf("write part failed: %v", err)
+	}
+	ref := ObjectRef{Bucket: "backup", Key: "one-part.bin", VersionID: "v1"}
+	meta, err := s.PromoteMultipartPart(ctx, "u1", 1, ref, part)
+	if err != nil {
+		t.Fatalf("promote part failed: %v", err)
+	}
+	if meta.Path != s.ObjectPath(ref) || meta.MD5Hex != part.MD5Hex || meta.SHA256 != part.SHA256 {
+		t.Fatalf("unexpected promoted metadata: %+v part=%+v", meta, part)
+	}
+	if _, err := os.Stat(part.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected original part path gone after rename, got %v", err)
+	}
+	var got bytes.Buffer
+	if _, err := s.ReadObject(ctx, meta, nil, &got); err != nil {
+		t.Fatalf("read promoted object failed: %v", err)
+	}
+	if got.String() != "hello multipart" {
+		t.Fatalf("unexpected promoted object content %q", got.String())
+	}
+}
+
 func TestDeleteObjectVersionedAndUnversioned(t *testing.T) {
 	t.Parallel()
 

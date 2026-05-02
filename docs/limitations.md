@@ -1,103 +1,105 @@
-# Known Limitations and Non-Goals (Release 1)
+# Known Limitations and Non-Goals
 
-This document outlines what s000 Release 1 does not include and known limitations.
+This document tracks practical gaps for running `s000` as a self-hosted, S3-compatible object store. The current goal is homelab and small single-node deployments: common client compatibility, predictable operations, and simple recovery are prioritized over full AWS feature parity.
 
-## Non-Goals (Out of Scope)
+## Implemented S3 Surface
 
-The following features are explicitly out of scope for Release 1:
+The following S3-compatible features are implemented and covered by unit/integration-style tests unless noted otherwise:
 
-### IAM and Access Control
-- **Full IAM policy parity**: No IAM policies, roles, or resource-based policies.
-- **Bucket policies**: Not supported.
-- **ACLs**: Basic ACL support not implemented.
+- Core bucket/object APIs: create/list/delete bucket, bucket location, `ListObjectsV2`, put/get/head/delete object, copy object, range reads, user metadata, and multi-object delete.
+- Multipart upload: create/upload/list/complete/abort, list multipart uploads, 10,000 part limit, 5 MiB non-final-part enforcement, multipart ETag semantics, and multipart checksums.
+- Versioning: enable/suspend, list object versions, delete markers, specific `versionId` delete, pagination markers, and null-version overwrite/delete behavior.
+- Request compatibility: SigV4 auth, common S3 XML errors, conditional object/copy requests, checksum validation/headers, and path-style plus optional virtual-host routing.
+- Bucket subresources: CORS, bucket policy persistence, public access block, website configuration, lifecycle configuration, notification configuration, replication configuration, ACL compatibility, and object tagging.
+- Data management: lifecycle XML expiration rules, SSE-S3 with a local master key, object lock retention/legal hold, webhook notifications, and simple async HTTP replication.
+- Website hosting: optional separate website listener with index/error documents, redirect-all, and routing rules.
 
-### Scaling and Distribution
-- **Multi-node clustering**: Single-node only in Release 1.
-- **Distributed erasure coding**: Not supported.
-- **Multi-region replication**: Out of scope.
+## Deliberate Non-Goals
 
-### Storage Tiers
-- **Glacier-class archival**: No cold storage tier.
-- **Object lock/WORM**: Deferred to post-Release 1.
-- **SSE-KMS**: Server-side encryption with external key management not supported.
+These are intentionally out of scope for the current single-node/homelab target:
 
-### Advanced Features
-- **Versioning beyond basic enable/suspend**: No MFA delete, lifecycle on versions.
-- **Cross-origin (CORS) configuration**: Not implemented.
-- **Tagging on buckets/objects**: Not implemented.
-- **Batch operations**: No批量删除或批量还原。
-- **Select/S3 Select**: Not supported.
+- Full AWS IAM, STS, roles, and complete bucket-policy evaluation.
+- Distributed clustering, distributed erasure coding, automatic failover, or multi-node quorum behavior.
+- Glacier/deep-archive storage classes and lifecycle transitions to cold storage.
+- SSE-KMS or external key-manager integration.
+- S3 Select, Object Lambda, Inventory, Batch Operations, Access Points, and Object Ownership controls.
+- AWS-compatible notification destinations beyond simple HTTP(S) webhook-style delivery.
 
 ## Known Limitations
 
-### S3 API Compatibility
-- **Virtual-host style**: Requires `S000_DOMAIN` to be set; limited to single bucket per domain.
-- **Path-style only by default**: Virtual-host routing is optional.
-- **Pre-signed URLs**: Only GET and PUT methods supported; expires limited to max 7 days.
-- **CopyObject**: Does not support `x-amz-copy-source-if-*` conditional headers.
+### Access Control
 
-### Performance
-- **No parallel uploads**: Multipart must upload parts sequentially (though parts can be uploaded concurrently by client).
-- **Limited caching**: No object caching layer; all requests hit storage.
-- **No CDN integration**: Static website hosting serves directly from storage.
+- Bucket policies are persisted and returned, but full IAM-style policy enforcement is not implemented.
+- ACL APIs are compatibility-oriented: `GET ?acl` returns owner full-control XML and `PUT ?acl` accepts common canned ACLs as no-ops.
+- Public access block configuration is stored, but full AWS public-access policy semantics should not be assumed.
+- Personal access tokens are available for the built-in UI/API workflows, but they are not an AWS IAM replacement.
+
+### Encryption and Object Lock
+
+- SSE-S3 requires `S000_SSE_MASTER_KEY`, a base64-encoded 32-byte local master key.
+- There is no key rotation workflow yet for already-encrypted objects.
+- SSE-KMS, SSE-C, and external KMS integrations are not supported.
+- Object lock retention/legal hold is enforced by `s000`, but bucket-level AWS object-lock enablement and governance bypass semantics are intentionally minimal.
+
+### Replication and Notifications
+
+- Notifications are asynchronous best-effort webhook deliveries. Delivery state is not durably queued.
+- Replication is asynchronous best-effort HTTP `PUT` to a configured S3-compatible endpoint. There is no durable retry spool, replication status field, or delete replication yet.
+- Failed notification/replication deliveries are logged/observable through process logs rather than a built-in dead-letter queue.
+
+### Lifecycle
+
+- Lifecycle execution focuses on expiration-style rules that are useful for homelabs.
+- Storage class transitions, noncurrent-version transition classes, and advanced AWS lifecycle actions are not implemented.
+- Multipart cleanup exists as local staging GC, but full lifecycle XML parity for abandoned multipart upload rules is not complete.
+
+### S3 API Compatibility
+
+- Virtual-host style routing requires `S000_DOMAIN`; path-style works by default.
+- Pre-signed URL support is focused on GET and PUT with SigV4 expiration limits.
+- `CopyObject` supports common condition headers, but not every AWS copy option or metadata directive nuance should be assumed.
+- Real-client validation is incomplete for `rclone`, `restic`, MinIO `mc`, and `s3cmd`.
 
 ### Metadata Backends
-- **Valkey limitations**: Valkey adapter is for metadata caching/coordination only, not authoritative metadata storage.
-- **Transaction limitations**: SQLite has database-level locking; high concurrency may cause `database is locked` errors.
-- **No automatic failover**: If using networked backends (PostgreSQL, MariaDB), there's no automatic failover.
+
+- SQLite, libSQL, PostgreSQL, and MariaDB use native row-level metadata stores.
+- Valkey is capability-gated for cache/coordination use and is not an authoritative metadata backend.
+- SQLite can still hit database-level locking under high write concurrency; PostgreSQL/MariaDB are better choices for heavier concurrent use.
+- There is no automatic failover for networked metadata backends.
 
 ### Operations
-- **No rolling upgrades**: Upgrades require brief downtime.
-- **No online compaction**: SQLite database may grow over time; periodic manual vacuum recommended.
-- **Limited metrics retention**: Metrics are exposed but not stored; external Prometheus required for long-term retention.
 
-### Security
-- **No data-at-rest encryption**: SSE-S3 style encryption deferred.
-- **No mutual TLS (mTLS)**: Client certificate authentication not supported.
-- **No audit log export**: Logs to stdout only; external log aggregation required.
-
-### Backup/Restore
-- **No incremental backup**: Full snapshots only.
-- **No point-in-time recovery**: Restore to any arbitrary point not supported.
-- **No replication**: Backup to remote storage must be done externally.
+- Single-node only: durability depends on the local filesystem, metadata DB durability, and your backup/snapshot process.
+- Upgrades may require brief downtime.
+- SQLite may require periodic manual vacuum/maintenance.
+- Metrics are exposed but not retained; use Prometheus or another external collector.
+- Backups are full/snapshot-oriented. Point-in-time recovery and incremental backup are not built in.
 
 ## Compatibility Notes
 
 ### Tested Clients
-- aws-cli (tested)
-- Go SDK (smoke tested)
-- Python boto3 (smoke tested)
-- JavaScript AWS SDK (smoke tested)
 
-### Untested/Unverified
-- S3 Browser and other GUI tools
-- rclone
-- Restic, Borg backup (may work but unverified)
-- Cyberduck
+- aws-cli compatibility flow is tested.
+- Go SDK smoke flow is tested.
+- Python boto3 smoke flow is tested.
+- JavaScript AWS SDK smoke flow is tested.
 
-## Future Considerations (Post-Release 1)
+### Untested or Not Yet Automated
 
-Based on the roadmap, these features are under consideration for future releases:
+- `rclone`
+- `restic`
+- MinIO `mc`
+- `s3cmd`
+- GUI tools such as Cyberduck or S3 Browser
 
-1. **Multi-node clustering** with placement strategies
-2. **Async replication** to secondary targets
-3. **Object lock/WORM** for compliance
-4. **SSE-S3 with local master key**
-5. **Expanded policy system and tenancy controls**
-6. **Advanced lifecycle transitions** (transition to cold storage)
+## Practical Homelab Guidance
 
-## Workarounds
-
-For features not available in Release 1:
-
-| Missing Feature | Workaround |
-|-----------------|-------------|
-| IAM policies | Use access key/secret key with limited scope (application-level) |
-| Replication | External sync tool (rclone, aws-cli sync) to second s000 instance |
-| Encryption | Layer encryption at application level; filesystem-level LUKS |
-| Multi-node | Run multiple s000 instances on different ports; load balance at application level |
-| Object lock | Application-level lease/mutex; external enforcement |
+- Use SQLite for simple single-user/home deployments; use PostgreSQL or MariaDB if you expect heavier concurrent writes.
+- Put the blob directory and metadata DB on reliable storage with snapshots.
+- Use TLS when exposing beyond localhost.
+- Set `S000_SSE_MASTER_KEY` before accepting SSE-S3 writes, and back that key up separately.
+- Treat replication and notifications as convenience features until durable retry state is added.
 
 ## Reporting Issues
 
-If you encounter behavior that seems like a bug (not listed as a limitation), please open an issue. Compatibility issues with standard S3 tools that block common workflows are prioritized for fixes.
+If a common S3 client fails against `s000`, file the exact command, client version, request path if available, and the S3 XML error returned. Compatibility issues with common homelab tools are prioritized over obscure AWS-only features.

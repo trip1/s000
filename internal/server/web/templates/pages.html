@@ -50,10 +50,10 @@
       </div>
       <figure>
         <table>
-          <thead><tr><th>Bucket</th><th>Objects</th><th>Total size (bytes)</th><th>Region</th><th>Versioning</th><th>Created</th></tr></thead>
+          <thead><tr><th>Bucket</th><th>Objects</th><th>Total size (bytes)</th><th>Region</th><th>Versioning</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>
             {{if not .BucketSummaries}}
-              <tr><td colspan="6">No buckets found.</td></tr>
+              <tr><td colspan="7">No buckets found.</td></tr>
             {{end}}
             {{range .BucketSummaries}}
               <tr>
@@ -63,6 +63,7 @@
                 <td>{{.Region}}</td>
                 <td>{{.VersioningStatus}}</td>
                 <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+                <td><a href="/app/buckets/{{p .Name}}">Settings</a></td>
               </tr>
             {{end}}
           </tbody>
@@ -195,6 +196,42 @@
     </form>
   </article>
   <article>
+    <h2>Lifecycle</h2>
+    <p><small>Paste S3 lifecycle XML for expiration rules. Disable or clear the document to remove it.</small></p>
+    <form method="post" action="/app/actions/update-bucket-lifecycle" aria-label="Bucket lifecycle XML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="lifecycle_enabled" {{if .BucketLifecycle.Enabled}}checked{{end}}> Enable lifecycle</label>
+      <label for="lifecycle-document">Lifecycle XML</label>
+      <textarea id="lifecycle-document" name="lifecycle_document" rows="8" placeholder='<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>'>{{.BucketLifecycle.Document}}</textarea>
+      <button type="submit">Save lifecycle</button>
+    </form>
+  </article>
+  <article>
+    <h2>Notifications</h2>
+    <p><small>Webhook delivery supports HTTP(S) endpoints in Endpoint, Url, Queue, Topic, or CloudFunction fields.</small></p>
+    <form method="post" action="/app/actions/update-bucket-notification" aria-label="Bucket notification XML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="notification_enabled" {{if .BucketNotification.Enabled}}checked{{end}}> Enable notifications</label>
+      <label for="notification-document">Notification XML</label>
+      <textarea id="notification-document" name="notification_document" rows="8" placeholder='<NotificationConfiguration><QueueConfiguration><Endpoint>https://example.test/hook</Endpoint><Event>ObjectCreated:*</Event></QueueConfiguration></NotificationConfiguration>'>{{.BucketNotification.Document}}</textarea>
+      <button type="submit">Save notifications</button>
+    </form>
+  </article>
+  <article>
+    <h2>Replication</h2>
+    <p><small>Async best-effort replication sends object-create payloads to Destination Endpoint and Bucket.</small></p>
+    <form method="post" action="/app/actions/update-bucket-replication" aria-label="Bucket replication XML">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <label><input type="checkbox" name="replication_enabled" {{if .BucketReplication.Enabled}}checked{{end}}> Enable replication</label>
+      <label for="replication-document">Replication XML</label>
+      <textarea id="replication-document" name="replication_document" rows="8" placeholder='<ReplicationConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>photos/</Prefix></Filter><Destination><Endpoint>https://backup.example.test</Endpoint><Bucket>mirror</Bucket></Destination></Rule></ReplicationConfiguration>'>{{.BucketReplication.Document}}</textarea>
+      <button type="submit">Save replication</button>
+    </form>
+  </article>
+  <article>
     <h2>Danger zone</h2>
     <p>Delete this bucket and remove all objects stored in it.</p>
     <form method="post" action="/app/actions/delete-bucket" aria-label="Delete bucket" onsubmit="return confirm('Delete this bucket and all objects? This cannot be undone.');">
@@ -208,57 +245,70 @@
 
 {{define "pages/objects"}}
   {{template "layout_start" .}}
-  <article data-title="Objects: {{.BucketName}}">
-    <h1>Object Browser: {{.BucketName}}</h1>
+  <article class="file-manager-hero" data-title="Files: {{.BucketName}}">
+    <div>
+      <p class="eyebrow">Bucket File Manager</p>
+      <h1>{{.BucketName}}</h1>
+      <p>Browse folders, open nested paths, and upload files or whole folders into the current location.</p>
+    </div>
     {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
     {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
-    <nav aria-label="Folder breadcrumbs">
-      <a href="/app/buckets/{{p .BucketName}}/objects?delimiter={{q .Delimiter}}">root</a>
-      {{range .Breadcrumbs}} / <a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .Prefix}}&delimiter={{q $.Delimiter}}">{{.Label}}</a>{{end}}
+    <nav class="file-breadcrumbs" aria-label="Folder breadcrumbs">
+      <a href="/app/buckets/{{p .BucketName}}/objects?delimiter={{q .Delimiter}}">{{.BucketName}}</a>
+      {{range .Breadcrumbs}}<span>/</span><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{qp .Prefix}}&delimiter={{q $.Delimiter}}">{{.Label}}</a>{{end}}
     </nav>
   </article>
-  <article>
-    <form method="get" action="/app/buckets/{{p .BucketName}}/objects" aria-label="Object list filters">
-      <label for="prefix-filter">Prefix</label>
-      <input id="prefix-filter" type="text" name="prefix" value="{{.Prefix}}" placeholder="photos/2026/">
-      <label for="delimiter-filter">Delimiter</label>
-      <input id="delimiter-filter" type="text" name="delimiter" value="{{.Delimiter}}" placeholder="/">
-      <label for="max-keys-filter">Max keys</label>
-      <input id="max-keys-filter" type="number" min="1" max="1000" name="max-keys" value="{{.MaxKeys}}">
-      <button type="submit">Apply filters</button>
-    </form>
-  </article>
-  <article>
-    <form method="post" action="/app/actions/upload-object" enctype="multipart/form-data" data-upload-form aria-label="Upload object">
-      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
-      <input type="hidden" name="bucket" value="{{.BucketName}}">
-      <input type="hidden" name="prefix" value="{{.Prefix}}">
-      <input type="hidden" name="delimiter" value="{{.Delimiter}}">
-      <label for="upload-key">Object key</label>
-      <input id="upload-key" type="text" name="key" data-upload-key required>
-      <label for="upload-file">File</label>
-      <input id="upload-file" type="file" name="file" data-upload-file required>
-      <button type="button" data-upload-prefill>Use current folder + filename</button>
-      <small>Current folder prefix: {{if .Prefix}}<code>{{.Prefix}}</code>{{else}}<code>(bucket root)</code>{{end}}</small>
-      <button type="submit">Upload</button>
-      <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p id="upload-status" role="status" aria-live="polite"></p>
-    </form>
-  </article>
-  <article>
-    <form method="post" action="/app/actions/create-folder" aria-label="Create folder">
-      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
-      <input type="hidden" name="bucket" value="{{.BucketName}}">
-      <input type="hidden" name="prefix" value="{{.Prefix}}">
-      <input type="hidden" name="delimiter" value="{{.Delimiter}}">
-      <label for="create-folder-name">Folder name</label>
-      <input id="create-folder-name" type="text" name="folder" placeholder="new-folder" required>
-      <button type="submit">Create folder</button>
-    </form>
-  </article>
-  <div id="object-table" hx-ext="sse" sse-connect="/app/events/objects?bucket={{q .BucketName}}&prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .ContinuationToken}}" sse-swap="objects-updated">
-    {{template "partials/objects_table" .}}
-  </div>
+  <section class="file-manager-layout" aria-label="Bucket file manager">
+    <article class="file-manager-sidebar">
+      <h2>Upload Here</h2>
+      <p><small>Current folder: {{if .Prefix}}<code>{{.Prefix}}</code>{{else}}<code>/</code>{{end}}</small></p>
+      <form method="post" action="/app/actions/upload-object" enctype="multipart/form-data" data-drop-upload-form aria-label="Upload files and folders">
+        <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+        <input type="hidden" name="bucket" value="{{.BucketName}}">
+        <input type="hidden" name="prefix" value="{{.Prefix}}">
+        <input type="hidden" name="delimiter" value="{{.Delimiter}}">
+        <input id="objects-files" type="file" name="files" multiple data-drop-input hidden>
+        <input id="objects-folder" type="file" name="files" webkitdirectory directory multiple data-drop-folder-input hidden>
+        <div class="drop-upload-zone file-drop-zone" data-drop-zone tabindex="0" role="button" aria-controls="objects-files" aria-label="Drag and drop files or folders here or press enter to browse files">
+          <strong>Drop files or folders</strong>
+          <span>Folder paths are preserved under the current folder.</span>
+        </div>
+        <div class="drop-upload-actions">
+          <button type="button" data-drop-select-files>Select files</button>
+          <button type="button" data-drop-select-folder>Select folder</button>
+        </div>
+        <ul class="drop-upload-list" data-drop-list><li>No files selected.</li></ul>
+        <progress max="100" value="0" hidden data-drop-progress></progress>
+        <p role="status" aria-live="polite" data-drop-status></p>
+        <button type="submit">Upload to this folder</button>
+      </form>
+      <hr>
+      <form method="post" action="/app/actions/create-folder" aria-label="Create folder">
+        <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+        <input type="hidden" name="bucket" value="{{.BucketName}}">
+        <input type="hidden" name="prefix" value="{{.Prefix}}">
+        <input type="hidden" name="delimiter" value="{{.Delimiter}}">
+        <label for="create-folder-name">New folder</label>
+        <input id="create-folder-name" type="text" name="folder" placeholder="new-folder" required>
+        <button type="submit">Create folder</button>
+      </form>
+    </article>
+    <article class="file-manager-main">
+      <div class="file-manager-toolbar">
+        <form method="get" action="/app/buckets/{{p .BucketName}}/objects" aria-label="Object list filters">
+          <input type="hidden" name="delimiter" value="{{.Delimiter}}">
+          <label for="prefix-filter">Go to path</label>
+          <input id="prefix-filter" type="text" name="prefix" value="{{.Prefix}}" placeholder="photos/2026/">
+          <label for="max-keys-filter">Max keys</label>
+          <input id="max-keys-filter" type="number" min="1" max="1000" name="max-keys" value="{{.MaxKeys}}">
+          <button type="submit">Open</button>
+        </form>
+      </div>
+      <div id="object-table" hx-ext="sse" sse-connect="/app/events/objects?bucket={{q .BucketName}}&prefix={{qp .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .ContinuationToken}}" sse-swap="objects-updated">
+        {{template "partials/objects_table" .}}
+      </div>
+    </article>
+  </section>
   {{template "layout_end" .}}
 {{end}}
 
@@ -277,6 +327,32 @@
       <input id="object-mime-type" type="text" name="content_type" value="{{if and .Object .Object.Metadata}}{{index .Object.Metadata "content-type"}}{{end}}" placeholder="application/wasm">
       <button type="submit">Update MIME type</button>
     </form>
+    <form method="post" action="/app/actions/update-object-retention" aria-label="Update object retention">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="key" value="{{.ObjectKey}}">
+      <label for="object-retention-mode">Retention mode</label>
+      <select id="object-retention-mode" name="retention_mode">
+        <option value="">None</option>
+        <option value="GOVERNANCE" {{if and .Object .Object.Metadata (eq (index .Object.Metadata "__s000_retention_mode") "GOVERNANCE")}}selected{{end}}>GOVERNANCE</option>
+        <option value="COMPLIANCE" {{if and .Object .Object.Metadata (eq (index .Object.Metadata "__s000_retention_mode") "COMPLIANCE")}}selected{{end}}>COMPLIANCE</option>
+      </select>
+      <label for="object-retain-until">Retain until (RFC3339 UTC)</label>
+      <input id="object-retain-until" type="text" name="retain_until" value="{{if and .Object .Object.Metadata}}{{index .Object.Metadata "__s000_retention_retain_until"}}{{end}}" placeholder="2026-12-31T23:59:59Z">
+      <button type="submit">Save retention</button>
+      <small>Clear both fields to remove retention metadata.</small>
+    </form>
+    <form method="post" action="/app/actions/update-object-legal-hold" aria-label="Update object legal hold">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <input type="hidden" name="bucket" value="{{.BucketName}}">
+      <input type="hidden" name="key" value="{{.ObjectKey}}">
+      <label for="object-legal-hold">Legal hold</label>
+      <select id="object-legal-hold" name="legal_hold">
+        <option value="OFF" {{if or (not .Object) (not .Object.Metadata) (ne (index .Object.Metadata "__s000_legal_hold") "ON")}}selected{{end}}>OFF</option>
+        <option value="ON" {{if and .Object .Object.Metadata (eq (index .Object.Metadata "__s000_legal_hold") "ON")}}selected{{end}}>ON</option>
+      </select>
+      <button type="submit">Save legal hold</button>
+    </form>
     <form method="post" action="/app/actions/delete-object" aria-label="Delete object">
       <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
       <input type="hidden" name="bucket" value="{{.BucketName}}">
@@ -293,10 +369,10 @@
 {{define "pages/uploads"}}
   {{template "layout_start" .}}
   <article data-title="Uploads">
-    <h1>Multipart Uploads</h1>
+    <h1>Bucket Uploads</h1>
     {{if .Flash}}<div class="flash success" role="status" aria-live="polite">{{.Flash}}</div>{{end}}
     {{if .Error}}<div class="flash error" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}
-    <p>Upload monitoring shell page with drag-and-drop support.</p>
+    <p>Upload files or whole folders while preserving nested paths.</p>
   </article>
   <article>
     <h2>Quick upload</h2>
@@ -312,10 +388,10 @@
       <label for="upload-prefix">Key prefix (optional)</label>
       <input id="upload-prefix" type="text" name="prefix" placeholder="photos/2026/">
       <input id="uploads-files" type="file" name="files" multiple data-drop-input hidden>
-      <input id="uploads-folder" type="file" webkitdirectory directory multiple data-drop-folder-input hidden>
+      <input id="uploads-folder" type="file" name="files" webkitdirectory directory multiple data-drop-folder-input hidden>
       <div class="drop-upload-zone" data-drop-zone tabindex="0" role="button" aria-controls="uploads-files" aria-label="Drag and drop files here or press enter to browse files">
         <strong>Drop files here</strong>
-        <span>or click to browse. Drop a folder to preserve its structure in object keys.</span>
+        <span>or click to browse. Drop a folder to upload that folder and all nested content.</span>
       </div>
       <div class="drop-upload-actions">
         <button type="button" data-drop-select-files>Select files</button>

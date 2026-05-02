@@ -1,8 +1,6 @@
 package metadata
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestParseBackend(t *testing.T) {
 	t.Parallel()
@@ -56,6 +54,20 @@ func TestCapabilityMatrixContainsAllBackends(t *testing.T) {
 		if caps.Name == "" {
 			t.Fatalf("missing capability name for backend %q", backend)
 		}
+	}
+}
+
+func TestCapabilityMatrixMarksNativeSQLBackendsAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	caps := CapabilityMatrix()
+	for _, backend := range []Backend{BackendSQLite, BackendLibSQL, BackendPostgreSQL, BackendMariaDB} {
+		if !caps[backend].AuthoritativeStore {
+			t.Fatalf("expected backend %q to be authoritative", backend)
+		}
+	}
+	if caps[BackendValkey].AuthoritativeStore {
+		t.Fatal("expected valkey to remain non-authoritative")
 	}
 }
 

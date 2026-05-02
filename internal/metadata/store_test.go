@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -131,6 +132,52 @@ func TestTransactionalCommitAndRollback(t *testing.T) {
 	if latest.VersionID != "v1" {
 		t.Fatalf("expected rolled back version to remain v1, got %q", latest.VersionID)
 	}
+}
+
+func TestSQLiteListObjectsV2TreatsPrefixAsLiteralString(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	store, err := NewStore(Config{Backend: BackendSQLite, DSN: "file:" + filepath.Join(t.TempDir(), "metadata.db")})
+	if err != nil {
+		t.Fatalf("new store failed: %v", err)
+	}
+	if err := store.CreateBucket(ctx, Bucket{Name: "photos", CreatedAt: now}); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+	for _, key := range []string{"100%/match.txt", "100x/nope.txt", "under_score/match.txt", "underXscore/nope.txt"} {
+		if err := store.PutObjectVersion(ctx, ObjectVersion{Bucket: "photos", Key: key, VersionID: "null", CreatedAt: now}); err != nil {
+			t.Fatalf("put object %q failed: %v", key, err)
+		}
+	}
+
+	lister, ok := store.(ListObjectsV2Store)
+	if !ok {
+		t.Fatal("expected sqlite store to support ListObjectsV2")
+	}
+	percentPage, err := lister.ListObjectsV2(ctx, "photos", ListObjectsV2Options{Prefix: "100%/", MaxKeys: 1000})
+	if err != nil {
+		t.Fatalf("list percent prefix failed: %v", err)
+	}
+	if got, want := listEntryValues(percentPage.Entries), []string{"100%/match.txt"}; !slices.Equal(got, want) {
+		t.Fatalf("percent prefix entries = %v, want %v", got, want)
+	}
+	underscorePage, err := lister.ListObjectsV2(ctx, "photos", ListObjectsV2Options{Prefix: "under_score/", MaxKeys: 1000})
+	if err != nil {
+		t.Fatalf("list underscore prefix failed: %v", err)
+	}
+	if got, want := listEntryValues(underscorePage.Entries), []string{"under_score/match.txt"}; !slices.Equal(got, want) {
+		t.Fatalf("underscore prefix entries = %v, want %v", got, want)
+	}
+}
+
+func listEntryValues(entries []ListObjectsV2Entry) []string {
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.Value)
+	}
+	return values
 }
 
 func TestMultipartAndCredentialModels(t *testing.T) {

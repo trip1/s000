@@ -92,6 +92,7 @@ type Config struct {
 	UITokensSSE            time.Duration
 	UIObjectsSSE           time.Duration
 	UIObjectMetadataSSE    time.Duration
+	SSEMasterKey           string
 	WebsiteEnabled         bool
 	WebsiteAddr            string
 	WebsiteDomain          string
@@ -329,6 +330,9 @@ func LoadFromEnv(getenv func(string) string) Config {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			cfg.UIObjectMetadataSSE = d
 		}
+	}
+	if v := getenv("S000_SSE_MASTER_KEY"); v != "" {
+		cfg.SSEMasterKey = v
 	}
 	if v := getenv("S000_WEBSITE_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {

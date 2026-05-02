@@ -88,10 +88,10 @@ Current core API behavior:
 - S3-style routes are wired for path-style and optional virtual-host style routing (`S000_DOMAIN`).
 - Non-health endpoints use SigV4 verification.
 - Personal access token authentication is also available via `Authorization: Bearer <token>` when PAT signing is configured.
-- Bucket APIs include create/list/delete (empty bucket), location, versioning, and ListObjectsV2.
-- Object APIs include put/get/head/delete, copy, range reads, user metadata headers, and checksum/ETag headers.
-- Multipart APIs include create/upload-part/list-parts/complete/abort and list multipart uploads.
-- Metadata backend selection is wired (`S000_METADATA_BACKEND`) with compatibility-layer adapters for `sqlite`, `libsql`, `postgresql`, `mariadb`, and `valkey`.
+- Bucket APIs include create/list/delete (empty bucket), location, website hosting, CORS, bucket policy persistence, public access block, lifecycle, notification, replication, ACL compatibility, versioning, object version listing, and ListObjectsV2.
+- Object APIs include put/get/head/delete, multi-object delete, copy, range reads, conditional requests, user metadata headers, object tagging, object lock retention/legal hold, ACL compatibility, SSE-S3, and checksum/ETag headers.
+- Multipart APIs include create/upload-part/list-parts/complete/abort, list multipart uploads, part-size/count enforcement, multipart ETag semantics, multipart checksums, and SSE-S3 multipart completion.
+- Metadata backend selection is wired (`S000_METADATA_BACKEND`); `sqlite`, `libsql`, `postgresql`, and `mariadb` use native row-level metadata storage, while `valkey` remains capability-gated for non-authoritative cache/coordination use.
 - Embedded web client is available at `/app/*` with a configurable UI theme.
 - Website endpoint support is available via `S000_WEBSITE_ENABLED` and `S000_WEBSITE_DOMAIN` with index/error documents, redirect-all, and routing rules.
 
@@ -131,6 +131,7 @@ Selected environment variables:
 - `S000_AUTH_FAIL_WINDOW` (default `1m`)
 - `S000_AUTH_BLOCK_DURATION` (default `5m`)
 - `S000_PAT_SIGNING_KEY` (optional PAT signing key; defaults to `S000_ADMIN_SECRET_KEY` when unset)
+- `S000_SSE_MASTER_KEY` (optional base64-encoded 32-byte key required for `x-amz-server-side-encryption: AES256` writes)
 - `S000_UI_THEME` (default `sysadmin90`; supported: `sysadmin90`)
 - `S000_UI_SSE_DASHBOARD_STATS_INTERVAL` (default `2s`; dashboard API stats refresh cadence)
 - `S000_UI_SSE_BUCKETS_INTERVAL` (default `10s`; buckets table refresh cadence)

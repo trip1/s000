@@ -20,7 +20,7 @@ Primary outcomes:
 
 ### Non-Goals (Release 1)
 - Full IAM policy parity with AWS IAM.
-- Multi-region replication.
+- Durable multi-region replication with AWS-level replication status semantics.
 - Glacier-class archival tiers.
 - Distributed erasure-coded cluster mode.
 
@@ -28,7 +28,7 @@ Primary outcomes:
 
 ### Bucket APIs
 - Create/List/Delete bucket.
-- Bucket location and basic configuration APIs.
+- Bucket location and common configuration APIs: website, CORS, lifecycle, notification, replication, public access block, ACL compatibility, and bucket policy persistence.
 - Bucket versioning: enabled/suspended.
 
 ### Object APIs
@@ -36,8 +36,9 @@ Primary outcomes:
 - ListObjectsV2.
 - CopyObject.
 - Range reads.
-- ETag and checksum headers.
+- Conditional requests, ETag, and checksum headers.
 - User metadata (`x-amz-meta-*`).
+- Object tagging, object lock retention/legal hold, and SSE-S3.
 - Virtual folder semantics via key prefixes (`/`) with `ListObjectsV2` support for `prefix`, `delimiter`, `CommonPrefixes`, and `KeyCount`.
 
 ### Multipart Upload
@@ -46,6 +47,7 @@ Primary outcomes:
 - CompleteMultipartUpload.
 - AbortMultipartUpload.
 - ListParts/ListMultipartUploads.
+- Multipart ETag semantics, checksum validation/headers, and SSE-S3 multipart completion.
 
 ### Access and Security
 - Access key + secret key authentication (SigV4-compatible request signing).
@@ -53,8 +55,9 @@ Primary outcomes:
 - Pre-signed URLs for GET/PUT.
 
 ### Lifecycle and Data Management
-- Basic lifecycle expiration by age/prefix.
-- Optional object lock deferred to post-Release 1.
+- Lifecycle expiration by age/prefix from S3 lifecycle XML.
+- Object lock retention/legal hold for WORM-style protection.
+- Best-effort webhook notifications and async HTTP replication for simple homelab workflows.
 
 ### Compatibility Target
 - Prioritize API behavior required by:
@@ -121,7 +124,7 @@ Primary outcomes:
 - SigV4 request validation for authenticated API calls.
 - Secrets never stored in plaintext (store derived hashes where possible).
 - TLS for in-transit encryption; support custom certs.
-- Optional at-rest encryption (SSE-S3 style) with a local master key in Release 1.1.
+- Optional at-rest encryption (SSE-S3 style) with a local master key.
 - Audit log events for auth failures, key creation/rotation, and delete operations.
 
 ## 8) Observability and Operations

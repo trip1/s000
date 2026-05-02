@@ -35,3 +35,18 @@ func TestParseRulesInvalid(t *testing.T) {
 		t.Fatalf("expected missing age parse error, got %v", err)
 	}
 }
+
+func TestParseLifecycleXMLRules(t *testing.T) {
+	t.Parallel()
+
+	rules, err := ParseLifecycleXMLRules(`<LifecycleConfiguration><Rule><ID>logs</ID><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>7</Days></Expiration></Rule><Rule><ID>off</ID><Status>Disabled</Status><Prefix>tmp/</Prefix><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`)
+	if err != nil {
+		t.Fatalf("parse lifecycle xml failed: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected one enabled rule, got %d", len(rules))
+	}
+	if rules[0].Prefix != "logs/" || rules[0].ExpireAfter != 7*24*time.Hour {
+		t.Fatalf("unexpected parsed rule: %+v", rules[0])
+	}
+}

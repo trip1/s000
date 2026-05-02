@@ -2,15 +2,16 @@
 {{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
 <figure>
   <table>
-    <thead><tr><th>Bucket</th><th>Created</th></tr></thead>
+    <thead><tr><th>Bucket</th><th>Created</th><th>Actions</th></tr></thead>
     <tbody>
       {{if not .Buckets}}
-        <tr><td colspan="2">No buckets found.</td></tr>
+        <tr><td colspan="3">No buckets found.</td></tr>
       {{end}}
       {{range .Buckets}}
         <tr>
           <td><a href="/app/buckets/{{p .Name}}/objects">{{.Name}}</a></td>
           <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
+          <td><a href="/app/buckets/{{p .Name}}">Settings</a></td>
         </tr>
       {{end}}
     </tbody>
@@ -21,17 +22,18 @@
 
 {{define "partials/objects_table"}}
 {{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
-<figure>
-  <table>
-    <thead><tr><th>Key</th><th>Size</th><th>Last Modified</th><th>Actions</th></tr></thead>
+<figure class="file-list">
+  <table aria-label="Folder contents">
+    <thead><tr><th>Name</th><th>Kind</th><th>Size</th><th>Last Modified</th><th>Actions</th></tr></thead>
     <tbody>
       {{range .CommonPrefixes}}
-        <tr>
-          <td><a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">{{.}}</a></td>
+        <tr class="file-row folder-row">
+          <td><a class="file-name" href="/app/buckets/{{p $.BucketName}}/objects?prefix={{qp .}}&delimiter={{q $.Delimiter}}"><span aria-hidden="true">[dir]</span> {{displayPrefix .}}</a><small>{{.}}</small></td>
+          <td>Folder</td>
           <td>-</td>
-          <td>prefix</td>
+          <td>-</td>
           <td>
-            <a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{q .}}&delimiter={{q $.Delimiter}}">Open</a>
+            <a href="/app/buckets/{{p $.BucketName}}/objects?prefix={{qp .}}&delimiter={{q $.Delimiter}}">Open</a>
             <form method="post" action="/app/actions/delete-folder" onsubmit="return confirm('Delete all objects in this folder prefix?');">
               <input type="hidden" name="_csrf" value="{{$.CSRFToken}}">
               <input type="hidden" name="bucket" value="{{$.BucketName}}">
@@ -44,11 +46,12 @@
         </tr>
       {{end}}
       {{if and (not .Objects) (not .CommonPrefixes)}}
-        <tr><td colspan="4">No objects found.</td></tr>
+        <tr><td colspan="5">No objects found.</td></tr>
       {{end}}
       {{range .Objects}}
-        <tr>
-          <td>{{if hasSuffix .Key "/"}}{{.Key}}{{else}}<a href="/app/buckets/{{p $.BucketName}}/objects/{{p .Key}}">{{.Key}}</a>{{end}}</td>
+        <tr class="file-row object-row">
+          <td>{{if hasSuffix .Key "/"}}<span class="file-name"><span aria-hidden="true">[dir]</span> {{displayObject .Key}}</span><small>{{.Key}}</small>{{else}}<a class="file-name" href="/app/buckets/{{p $.BucketName}}/objects/{{kp .Key}}"><span aria-hidden="true">[file]</span> {{displayObject .Key}}</a><small>{{.Key}}</small>{{end}}</td>
+          <td>{{if hasSuffix .Key "/"}}Folder marker{{else}}File{{end}}</td>
           <td>{{.Size}}</td>
           <td>{{.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</td>
           <td>
@@ -84,8 +87,15 @@
       <dt>Version</dt><dd>{{.Object.VersionID}}</dd>
       <dt>Size</dt><dd>{{.Object.Size}}</dd>
       <dt>ETag</dt><dd>{{.Object.ETag}}</dd>
-      <dt>Checksum</dt><dd>{{.Object.ChecksumSHA256}}</dd>
+      <dt>Checksum SHA256</dt><dd>{{if .Object.ChecksumSHA256}}{{.Object.ChecksumSHA256}}{{else}}-{{end}}</dd>
+      <dt>Checksum SHA1</dt><dd>{{if .Object.ChecksumSHA1}}{{.Object.ChecksumSHA1}}{{else}}-{{end}}</dd>
+      <dt>Checksum CRC32</dt><dd>{{if .Object.ChecksumCRC32}}{{.Object.ChecksumCRC32}}{{else}}-{{end}}</dd>
+      <dt>Checksum CRC32C</dt><dd>{{if .Object.ChecksumCRC32C}}{{.Object.ChecksumCRC32C}}{{else}}-{{end}}</dd>
       <dt>MIME type</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "content-type")}}{{index .Object.Metadata "content-type"}}{{else}}-{{end}}</dd>
+      <dt>SSE-S3</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "__s000_sse")}}{{index .Object.Metadata "__s000_sse"}}{{else}}-{{end}}</dd>
+      <dt>Retention mode</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "__s000_retention_mode")}}{{index .Object.Metadata "__s000_retention_mode"}}{{else}}-{{end}}</dd>
+      <dt>Retain until</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "__s000_retention_retain_until")}}{{index .Object.Metadata "__s000_retention_retain_until"}}{{else}}-{{end}}</dd>
+      <dt>Legal hold</dt><dd>{{if and .Object.Metadata (index .Object.Metadata "__s000_legal_hold")}}{{index .Object.Metadata "__s000_legal_hold"}}{{else}}-{{end}}</dd>
       <dt>Created</dt><dd>{{.Object.CreatedAt.Format "2006-01-02 15:04:05Z07:00"}}</dd>
     </dl>
   {{else}}
@@ -105,7 +115,7 @@
 {{define "partials/pagination"}}
 <nav aria-label="Pagination">
   {{if .IsTruncated}}
-    <a href="/app/buckets/{{p .BucketName}}/objects?prefix={{q .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .NextContinuationToken}}">Next</a>
+    <a href="/app/buckets/{{p .BucketName}}/objects?prefix={{qp .Prefix}}&delimiter={{q .Delimiter}}&max-keys={{.MaxKeys}}&continuation-token={{q .NextContinuationToken}}">Next</a>
   {{else}}
     <span>End of results</span>
   {{end}}

@@ -92,6 +92,79 @@ article {
   margin-top: 0.2rem;
 }
 
+.file-manager-hero {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.file-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 22%, var(--border-color));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card-bg) 74%, transparent);
+}
+
+.file-manager-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.32fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.file-manager-sidebar,
+.file-manager-main {
+  margin-bottom: 1rem;
+}
+
+.file-manager-toolbar form {
+  display: grid;
+  grid-template-columns: auto minmax(12rem, 1fr) auto minmax(5rem, 7rem) auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.file-drop-zone {
+  min-height: 8rem;
+  align-content: center;
+}
+
+.file-list table {
+  width: 100%;
+}
+
+.file-row small {
+  display: block;
+  color: var(--muted-color);
+  overflow-wrap: anywhere;
+}
+
+.file-name {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.folder-row .file-name {
+  color: color-mix(in srgb, var(--primary-color) 82%, #fff);
+}
+
+.file-row form {
+  display: inline-block;
+  margin-left: 0.5rem;
+}
+
+@media (max-width: 820px) {
+  .file-manager-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .file-manager-toolbar form {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ============================================
    Shared Future-Tech App Shell
    ============================================ */

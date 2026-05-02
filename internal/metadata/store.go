@@ -47,9 +47,24 @@ type Store interface {
 	PutBucketPublicAccessBlock(ctx context.Context, cfg BucketPublicAccessBlock) error
 	GetBucketPublicAccessBlock(ctx context.Context, bucket string) (BucketPublicAccessBlock, error)
 	DeleteBucketPublicAccessBlock(ctx context.Context, bucket string) error
+	PutBucketLifecycle(ctx context.Context, cfg BucketLifecycle) error
+	GetBucketLifecycle(ctx context.Context, bucket string) (BucketLifecycle, error)
+	DeleteBucketLifecycle(ctx context.Context, bucket string) error
+	PutBucketNotification(ctx context.Context, cfg BucketNotification) error
+	GetBucketNotification(ctx context.Context, bucket string) (BucketNotification, error)
+	DeleteBucketNotification(ctx context.Context, bucket string) error
+	PutBucketReplication(ctx context.Context, cfg BucketReplication) error
+	GetBucketReplication(ctx context.Context, bucket string) (BucketReplication, error)
+	DeleteBucketReplication(ctx context.Context, bucket string) error
+	PutObjectTagging(ctx context.Context, cfg ObjectTagging) error
+	GetObjectTagging(ctx context.Context, bucket string, key string, versionID string) (ObjectTagging, error)
+	DeleteObjectTagging(ctx context.Context, bucket string, key string, versionID string) error
 	ListObjects(ctx context.Context, bucket string) ([]ObjectVersion, error)
+	ListObjectVersions(ctx context.Context, bucket string) ([]ObjectVersion, error)
 	GetLatestObjectVersion(ctx context.Context, bucket string, key string) (ObjectVersion, error)
 	GetObjectVersion(ctx context.Context, bucket string, key string, versionID string) (ObjectVersion, error)
+	UpdateObjectMetadata(ctx context.Context, bucket string, key string, versionID string, metadata map[string]string) error
+	DeleteObjectVersion(ctx context.Context, bucket string, key string, versionID string) (ObjectVersion, error)
 	DeleteAllObjectVersions(ctx context.Context, bucket string, key string) ([]ObjectVersion, error)
 	ListMultipartUploads(ctx context.Context, bucket string, prefix string) ([]MultipartUpload, error)
 	GetMultipartUpload(ctx context.Context, uploadID string) (MultipartUpload, []MultipartPart, error)
@@ -69,6 +84,13 @@ func NewStore(cfg Config) (Store, error) {
 		cfg.NowProvider = func() time.Time { return time.Now().UTC() }
 	}
 
+	if isNativeSQLBackend(cfg.Backend) && shouldUseNativeSQL(cfg) {
+		return newSQLiteStore(cfg)
+	}
+	if requiresNativeMetadataStore(cfg) {
+		return nil, fmt.Errorf("metadata backend %q does not yet have a native row-level store; use sqlite/libsql or local:// compatibility mode", cfg.Backend)
+	}
+
 	switch cfg.Backend {
 	case BackendSQLite:
 		return newMemoryBackedStore(cfg, "sqlite")
@@ -85,22 +107,45 @@ func NewStore(cfg Config) (Store, error) {
 	}
 }
 
+func isNativeSQLBackend(backend Backend) bool {
+	return backend == BackendSQLite || backend == BackendLibSQL || backend == BackendPostgreSQL || backend == BackendMariaDB
+}
+
+func shouldUseNativeSQL(cfg Config) bool {
+	if cfg.SQLDB != nil {
+		return true
+	}
+	_, ok := persistentFilePath(cfg.Backend, cfg.DSN)
+	return ok
+}
+
+func requiresNativeMetadataStore(cfg Config) bool {
+	if strings.HasPrefix(strings.TrimSpace(cfg.DSN), "local://") {
+		return false
+	}
+	return cfg.Valkey != nil
+}
+
 type objectKey struct {
 	bucket string
 	key    string
 }
 
 type memoryState struct {
-	buckets      map[string]Bucket
-	objects      map[objectKey][]ObjectVersion
-	multipart    map[string]MultipartUpload
-	parts        map[string]map[int]MultipartPart
-	credentials  map[string]CredentialRecord
-	websites     map[string]BucketWebsiteConfig
-	cors         map[string]BucketCORSConfig
-	policies     map[string]BucketPolicy
-	publicAccess map[string]BucketPublicAccessBlock
-	backendLabel string
+	buckets       map[string]Bucket
+	objects       map[objectKey][]ObjectVersion
+	multipart     map[string]MultipartUpload
+	parts         map[string]map[int]MultipartPart
+	credentials   map[string]CredentialRecord
+	websites      map[string]BucketWebsiteConfig
+	cors          map[string]BucketCORSConfig
+	policies      map[string]BucketPolicy
+	publicAccess  map[string]BucketPublicAccessBlock
+	lifecycles    map[string]BucketLifecycle
+	notifications map[string]BucketNotification
+	replications  map[string]BucketReplication
+	taggings      map[objectKey]ObjectTagging
+	backendLabel  string
 }
 
 type memoryBackedStore struct {
@@ -117,16 +162,20 @@ type persistedObject struct {
 }
 
 type persistedState struct {
-	Buckets      map[string]Bucket                     `json:"buckets"`
-	Objects      []persistedObject                     `json:"objects"`
-	Multipart    map[string]MultipartUpload            `json:"multipart"`
-	Parts        map[string]map[int]MultipartPart      `json:"parts"`
-	Credentials  map[string]CredentialRecord           `json:"credentials"`
-	Websites     map[string]BucketWebsiteConfig        `json:"websites"`
-	CORS         map[string]BucketCORSConfig           `json:"cors"`
-	Policies     map[string]BucketPolicy               `json:"policies"`
-	PublicAccess map[string]BucketPublicAccessBlock    `json:"public_access"`
-	BackendLabel string                                `json:"backend_label"`
+	Buckets       map[string]Bucket                  `json:"buckets"`
+	Objects       []persistedObject                  `json:"objects"`
+	Multipart     map[string]MultipartUpload         `json:"multipart"`
+	Parts         map[string]map[int]MultipartPart   `json:"parts"`
+	Credentials   map[string]CredentialRecord        `json:"credentials"`
+	Websites      map[string]BucketWebsiteConfig     `json:"websites"`
+	CORS          map[string]BucketCORSConfig        `json:"cors"`
+	Policies      map[string]BucketPolicy            `json:"policies"`
+	PublicAccess  map[string]BucketPublicAccessBlock `json:"public_access"`
+	Lifecycles    map[string]BucketLifecycle         `json:"lifecycles"`
+	Notifications map[string]BucketNotification      `json:"notifications"`
+	Replications  map[string]BucketReplication       `json:"replications"`
+	Taggings      []ObjectTagging                    `json:"taggings"`
+	BackendLabel  string                             `json:"backend_label"`
 }
 
 func newMemoryBackedStore(cfg Config, backendLabel string) (*memoryBackedStore, error) {
@@ -149,16 +198,20 @@ func newMemoryBackedStore(cfg Config, backendLabel string) (*memoryBackedStore, 
 
 func emptyState(backendLabel string) memoryState {
 	return memoryState{
-		buckets:      make(map[string]Bucket),
-		objects:      make(map[objectKey][]ObjectVersion),
-		multipart:    make(map[string]MultipartUpload),
-		parts:        make(map[string]map[int]MultipartPart),
-		credentials:  make(map[string]CredentialRecord),
-		websites:     make(map[string]BucketWebsiteConfig),
-		cors:         make(map[string]BucketCORSConfig),
-		policies:     make(map[string]BucketPolicy),
-		publicAccess: make(map[string]BucketPublicAccessBlock),
-		backendLabel: backendLabel,
+		buckets:       make(map[string]Bucket),
+		objects:       make(map[objectKey][]ObjectVersion),
+		multipart:     make(map[string]MultipartUpload),
+		parts:         make(map[string]map[int]MultipartPart),
+		credentials:   make(map[string]CredentialRecord),
+		websites:      make(map[string]BucketWebsiteConfig),
+		cors:          make(map[string]BucketCORSConfig),
+		policies:      make(map[string]BucketPolicy),
+		publicAccess:  make(map[string]BucketPublicAccessBlock),
+		lifecycles:    make(map[string]BucketLifecycle),
+		notifications: make(map[string]BucketNotification),
+		replications:  make(map[string]BucketReplication),
+		taggings:      make(map[objectKey]ObjectTagging),
+		backendLabel:  backendLabel,
 	}
 }
 
@@ -197,6 +250,9 @@ func (s *memoryBackedStore) DeleteBucket(_ context.Context, bucket string) error
 	delete(s.st.cors, bucket)
 	delete(s.st.policies, bucket)
 	delete(s.st.publicAccess, bucket)
+	delete(s.st.lifecycles, bucket)
+	delete(s.st.notifications, bucket)
+	delete(s.st.replications, bucket)
 	return s.persistLocked()
 }
 
@@ -354,6 +410,125 @@ func (s *memoryBackedStore) DeleteBucketPublicAccessBlock(_ context.Context, buc
 	return s.persistLocked()
 }
 
+func (s *memoryBackedStore) PutBucketLifecycle(_ context.Context, cfg BucketLifecycle) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.lifecycles[cfg.Bucket] = cfg
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) GetBucketLifecycle(_ context.Context, bucket string) (BucketLifecycle, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.lifecycles[bucket]
+	if !ok {
+		return BucketLifecycle{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+func (s *memoryBackedStore) DeleteBucketLifecycle(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.lifecycles[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.lifecycles, bucket)
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) PutBucketNotification(_ context.Context, cfg BucketNotification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.notifications[cfg.Bucket] = cfg
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) GetBucketNotification(_ context.Context, bucket string) (BucketNotification, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.notifications[bucket]
+	if !ok {
+		return BucketNotification{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+func (s *memoryBackedStore) DeleteBucketNotification(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.notifications[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.notifications, bucket)
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) PutBucketReplication(_ context.Context, cfg BucketReplication) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.buckets[cfg.Bucket]; !ok {
+		return ErrNotFound
+	}
+	s.st.replications[cfg.Bucket] = cfg
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) GetBucketReplication(_ context.Context, bucket string) (BucketReplication, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.replications[bucket]
+	if !ok {
+		return BucketReplication{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+func (s *memoryBackedStore) DeleteBucketReplication(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.st.replications[bucket]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.replications, bucket)
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) PutObjectTagging(_ context.Context, cfg ObjectTagging) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := objectKey{bucket: cfg.Bucket, key: cfg.Key + "\x00" + cfg.VersionID}
+	s.st.taggings[k] = cfg
+	return s.persistLocked()
+}
+
+func (s *memoryBackedStore) GetObjectTagging(_ context.Context, bucket string, key string, versionID string) (ObjectTagging, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.st.taggings[objectKey{bucket: bucket, key: key + "\x00" + versionID}]
+	if !ok {
+		return ObjectTagging{}, ErrNotFound
+	}
+	return cfg, nil
+}
+
+func (s *memoryBackedStore) DeleteObjectTagging(_ context.Context, bucket string, key string, versionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := objectKey{bucket: bucket, key: key + "\x00" + versionID}
+	if _, ok := s.st.taggings[k]; !ok {
+		return ErrNotFound
+	}
+	delete(s.st.taggings, k)
+	return s.persistLocked()
+}
+
 // ListObjects lists latest visible versions for one bucket.
 func (s *memoryBackedStore) ListObjects(_ context.Context, bucket string) ([]ObjectVersion, error) {
 	s.mu.RLock()
@@ -370,6 +545,28 @@ func (s *memoryBackedStore) ListObjects(_ context.Context, bucket string) ([]Obj
 		}
 		result = append(result, latest)
 	}
+	return result, nil
+}
+
+func (s *memoryBackedStore) ListObjectVersions(_ context.Context, bucket string) ([]ObjectVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.st.buckets[bucket]; !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]ObjectVersion, 0)
+	for key, versions := range s.st.objects {
+		if key.bucket != bucket {
+			continue
+		}
+		result = append(result, versions...)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Key == result[j].Key {
+			return result[i].CreatedAt.After(result[j].CreatedAt)
+		}
+		return result[i].Key < result[j].Key
+	})
 	return result, nil
 }
 
@@ -405,6 +602,46 @@ func (s *memoryBackedStore) GetObjectVersion(ctx context.Context, bucket string,
 		if v.VersionID == versionID {
 			return v, nil
 		}
+	}
+	return ObjectVersion{}, ErrNotFound
+}
+
+func (s *memoryBackedStore) UpdateObjectMetadata(_ context.Context, bucket string, key string, versionID string, metadata map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	versions := s.st.objects[objectKey{bucket: bucket, key: key}]
+	for i, v := range versions {
+		if v.VersionID != versionID {
+			continue
+		}
+		v.Metadata = copyStringMap(metadata)
+		versions[i] = v
+		s.st.objects[objectKey{bucket: bucket, key: key}] = versions
+		return s.persistLocked()
+	}
+	return ErrNotFound
+}
+
+func (s *memoryBackedStore) DeleteObjectVersion(_ context.Context, bucket string, key string, versionID string) (ObjectVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := objectKey{bucket: bucket, key: key}
+	versions := s.st.objects[k]
+	for i, v := range versions {
+		if v.VersionID != versionID {
+			continue
+		}
+		removed := v
+		versions = append(versions[:i], versions[i+1:]...)
+		if len(versions) == 0 {
+			delete(s.st.objects, k)
+		} else {
+			s.st.objects[k] = versions
+		}
+		if err := s.persistLocked(); err != nil {
+			return ObjectVersion{}, err
+		}
+		return removed, nil
 	}
 	return ObjectVersion{}, ErrNotFound
 }
@@ -596,6 +833,7 @@ func (t *memoryTx) DeleteBucket(_ context.Context, bucket string) error {
 	delete(t.st.cors, bucket)
 	delete(t.st.policies, bucket)
 	delete(t.st.publicAccess, bucket)
+	delete(t.st.lifecycles, bucket)
 	return nil
 }
 
@@ -664,7 +902,25 @@ func createBucket(st *memoryState, bucket Bucket) error {
 
 func putObjectVersion(st *memoryState, version ObjectVersion) {
 	k := objectKey{bucket: version.Bucket, key: version.Key}
+	if version.VersionID == "null" {
+		versions := st.objects[k]
+		filtered := versions[:0]
+		for _, existing := range versions {
+			if existing.VersionID != "null" {
+				filtered = append(filtered, existing)
+			}
+		}
+		st.objects[k] = filtered
+	}
 	st.objects[k] = append(st.objects[k], version)
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *memoryBackedStore) persistLocked() error {
@@ -700,6 +956,18 @@ func (s *memoryBackedStore) applyPersistedState(ps persistedState) {
 	if ps.PublicAccess != nil {
 		st.publicAccess = ps.PublicAccess
 	}
+	if ps.Lifecycles != nil {
+		st.lifecycles = ps.Lifecycles
+	}
+	if ps.Notifications != nil {
+		st.notifications = ps.Notifications
+	}
+	if ps.Replications != nil {
+		st.replications = ps.Replications
+	}
+	for _, tagging := range ps.Taggings {
+		st.taggings[objectKey{bucket: tagging.Bucket, key: tagging.Key + "\x00" + tagging.VersionID}] = tagging
+	}
 	for _, po := range ps.Objects {
 		k := objectKey{bucket: po.Bucket, key: po.Key}
 		st.objects[k] = append([]ObjectVersion(nil), po.Versions...)
@@ -719,32 +987,44 @@ func snapshotState(st memoryState) persistedState {
 		return objects[i].Bucket < objects[j].Bucket
 	})
 
+	taggings := make([]ObjectTagging, 0, len(st.taggings))
+	for _, cfg := range st.taggings {
+		taggings = append(taggings, cfg)
+	}
 	return persistedState{
-		Buckets:      st.buckets,
-		Objects:      objects,
-		Multipart:    st.multipart,
-		Parts:        st.parts,
-		Credentials:  st.credentials,
-		Websites:     st.websites,
-		CORS:         st.cors,
-		Policies:     st.policies,
-		PublicAccess: st.publicAccess,
-		BackendLabel: st.backendLabel,
+		Buckets:       st.buckets,
+		Objects:       objects,
+		Multipart:     st.multipart,
+		Parts:         st.parts,
+		Credentials:   st.credentials,
+		Websites:      st.websites,
+		CORS:          st.cors,
+		Policies:      st.policies,
+		PublicAccess:  st.publicAccess,
+		Lifecycles:    st.lifecycles,
+		Notifications: st.notifications,
+		Replications:  st.replications,
+		Taggings:      taggings,
+		BackendLabel:  st.backendLabel,
 	}
 }
 
 func cloneState(in memoryState) memoryState {
 	out := memoryState{
-		buckets:      make(map[string]Bucket, len(in.buckets)),
-		objects:      make(map[objectKey][]ObjectVersion, len(in.objects)),
-		multipart:    make(map[string]MultipartUpload, len(in.multipart)),
-		parts:        make(map[string]map[int]MultipartPart, len(in.parts)),
-		credentials:  make(map[string]CredentialRecord, len(in.credentials)),
-		websites:     make(map[string]BucketWebsiteConfig, len(in.websites)),
-		cors:         make(map[string]BucketCORSConfig, len(in.cors)),
-		policies:     make(map[string]BucketPolicy, len(in.policies)),
-		publicAccess: make(map[string]BucketPublicAccessBlock, len(in.publicAccess)),
-		backendLabel: in.backendLabel,
+		buckets:       make(map[string]Bucket, len(in.buckets)),
+		objects:       make(map[objectKey][]ObjectVersion, len(in.objects)),
+		multipart:     make(map[string]MultipartUpload, len(in.multipart)),
+		parts:         make(map[string]map[int]MultipartPart, len(in.parts)),
+		credentials:   make(map[string]CredentialRecord, len(in.credentials)),
+		websites:      make(map[string]BucketWebsiteConfig, len(in.websites)),
+		cors:          make(map[string]BucketCORSConfig, len(in.cors)),
+		policies:      make(map[string]BucketPolicy, len(in.policies)),
+		publicAccess:  make(map[string]BucketPublicAccessBlock, len(in.publicAccess)),
+		lifecycles:    make(map[string]BucketLifecycle, len(in.lifecycles)),
+		notifications: make(map[string]BucketNotification, len(in.notifications)),
+		replications:  make(map[string]BucketReplication, len(in.replications)),
+		taggings:      make(map[objectKey]ObjectTagging, len(in.taggings)),
+		backendLabel:  in.backendLabel,
 	}
 
 	for k, v := range in.buckets {
@@ -777,6 +1057,18 @@ func cloneState(in memoryState) memoryState {
 	}
 	for k, cfg := range in.publicAccess {
 		out.publicAccess[k] = cfg
+	}
+	for k, cfg := range in.lifecycles {
+		out.lifecycles[k] = cfg
+	}
+	for k, cfg := range in.notifications {
+		out.notifications[k] = cfg
+	}
+	for k, cfg := range in.replications {
+		out.replications[k] = cfg
+	}
+	for k, cfg := range in.taggings {
+		out.taggings[k] = cfg
 	}
 
 	return out

@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"ds9labs.com/s000/internal/auth"
+	"ds9labs.com/s000/internal/metadata"
 	"ds9labs.com/s000/internal/observability"
 )
 
@@ -152,6 +154,12 @@ func withAuthGate(next http.Handler, opts Options) http.Handler {
 			return
 		}
 
+		if !hasAuthMaterial(r) && anonymousPolicyAllows(r, opts) {
+			r = r.WithContext(withPrincipalContext(r.Context(), "anonymous"))
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		verifier := opts.Verifier
 		if verifier == nil {
 			writeS3Error(w, r, s3ErrorSpec{
@@ -185,6 +193,165 @@ func withAuthGate(next http.Handler, opts Options) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func hasAuthMaterial(r *http.Request) bool {
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		return true
+	}
+	q := r.URL.Query()
+	return q.Get("X-Amz-Signature") != "" || q.Get("X-Amz-Credential") != "" || q.Get("X-Amz-Algorithm") != ""
+}
+
+func anonymousPolicyAllows(r *http.Request, opts Options) bool {
+	if opts.Metadata == nil {
+		return false
+	}
+	bucket, key, ok := bucketAndKey(r, opts.Domain)
+	if !ok || bucket == "" {
+		return false
+	}
+	action, resource, ok := anonymousPolicyTarget(r, bucket, key)
+	if !ok {
+		return false
+	}
+	if block, err := opts.Metadata.GetBucketPublicAccessBlock(r.Context(), bucket); err == nil {
+		if block.BlockPublicPolicy || block.RestrictPublicBuckets {
+			return false
+		}
+	} else if err != nil && !errors.Is(err, metadata.ErrNotFound) {
+		return false
+	}
+	policy, err := opts.Metadata.GetBucketPolicy(r.Context(), bucket)
+	if err != nil || !policy.Enabled || strings.TrimSpace(policy.Document) == "" {
+		return false
+	}
+	return bucketPolicyAllowsAnonymous(policy.Document, action, resource)
+}
+
+func anonymousPolicyTarget(r *http.Request, bucket, key string) (action, resource string, ok bool) {
+	if key == "" {
+		if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+			return "s3:ListBucket", "arn:aws:s3:::" + bucket, true
+		}
+		return "", "", false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return "", "", false
+	}
+	return "s3:GetObject", "arn:aws:s3:::" + bucket + "/" + key, true
+}
+
+func bucketPolicyAllowsAnonymous(document, action, resource string) bool {
+	var policy bucketPolicyDocument
+	if err := json.Unmarshal([]byte(document), &policy); err != nil {
+		return false
+	}
+	allowed := false
+	for _, stmt := range policy.Statements {
+		if !stmt.matchesAnonymous(action, resource) {
+			continue
+		}
+		if strings.EqualFold(stmt.Effect, "Deny") {
+			return false
+		}
+		if strings.EqualFold(stmt.Effect, "Allow") {
+			allowed = true
+		}
+	}
+	return allowed
+}
+
+type bucketPolicyDocument struct {
+	Statements []bucketPolicyStatement `json:"Statement"`
+}
+
+func (d *bucketPolicyDocument) UnmarshalJSON(b []byte) error {
+	type rawDocument struct {
+		Statement json.RawMessage `json:"Statement"`
+	}
+	var raw rawDocument
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	statement := strings.TrimSpace(string(raw.Statement))
+	if statement == "" {
+		return nil
+	}
+	if statement[0] == '[' {
+		return json.Unmarshal(raw.Statement, &d.Statements)
+	}
+	var stmt bucketPolicyStatement
+	if err := json.Unmarshal(raw.Statement, &stmt); err != nil {
+		return err
+	}
+	d.Statements = []bucketPolicyStatement{stmt}
+	return nil
+}
+
+type bucketPolicyStatement struct {
+	Effect    string             `json:"Effect"`
+	Principal bucketPolicyValues `json:"Principal"`
+	Action    bucketPolicyValues `json:"Action"`
+	Resource  bucketPolicyValues `json:"Resource"`
+}
+
+func (s bucketPolicyStatement) matchesAnonymous(action, resource string) bool {
+	return s.Principal.contains("*") && s.Action.matches(action) && s.Resource.matches(resource)
+}
+
+type bucketPolicyValues []string
+
+func (v *bucketPolicyValues) UnmarshalJSON(b []byte) error {
+	var single string
+	if err := json.Unmarshal(b, &single); err == nil {
+		*v = []string{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err == nil {
+		*v = list
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	for _, raw := range obj {
+		var nested bucketPolicyValues
+		if err := json.Unmarshal(raw, &nested); err == nil {
+			*v = append(*v, nested...)
+		}
+	}
+	return nil
+}
+
+func (v bucketPolicyValues) contains(want string) bool {
+	for _, got := range v {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (v bucketPolicyValues) matches(want string) bool {
+	for _, pattern := range v {
+		if policyPatternMatches(pattern, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func policyPatternMatches(pattern, value string) bool {
+	if pattern == "*" || pattern == value {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(value, strings.TrimSuffix(pattern, "*"))
+	}
+	return false
 }
 
 func mapAuthErrorToS3(r *http.Request, err error) s3ErrorSpec {

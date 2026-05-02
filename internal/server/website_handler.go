@@ -19,11 +19,17 @@ type WebsiteHandler struct {
 	store  metadata.Store
 	blob   *blob.Store
 	domain string
+	sseKey []byte
 }
 
 // NewWebsiteHandler builds website endpoint handler.
 func NewWebsiteHandler(store metadata.Store, bstore *blob.Store, domain string) http.Handler {
-	return &WebsiteHandler{store: store, blob: bstore, domain: strings.TrimSpace(domain)}
+	return NewWebsiteHandlerWithSSE(store, bstore, domain, nil)
+}
+
+// NewWebsiteHandlerWithSSE builds website endpoint handler with SSE-S3 read support.
+func NewWebsiteHandlerWithSSE(store metadata.Store, bstore *blob.Store, domain string, sseKey []byte) http.Handler {
+	return &WebsiteHandler{store: store, blob: bstore, domain: strings.TrimSpace(domain), sseKey: sseKey}
 }
 
 func (h *WebsiteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +67,12 @@ func (h *WebsiteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resolved := h.resolveWebsiteKey(key, cfg.IndexDocument)
 	obj, keyErr := h.lookupObject(r, bucket, resolved)
+	if keyErr != nil && key != "" && !strings.HasSuffix(key, "/") {
+		if _, dirErr := h.lookupObject(r, bucket, key+"/"+websiteIndexDocument(cfg.IndexDocument)); dirErr == nil {
+			h.redirectToDirectoryPath(w, r)
+			return
+		}
+	}
 	if keyErr != nil && resolved != key {
 		obj, keyErr = h.lookupObject(r, bucket, key)
 	}
@@ -119,10 +131,7 @@ func (h *WebsiteHandler) resolveBucketAndKey(r *http.Request) (bucket, key strin
 }
 
 func (h *WebsiteHandler) resolveWebsiteKey(key, index string) string {
-	index = strings.TrimSpace(index)
-	if index == "" {
-		index = "index.html"
-	}
+	index = websiteIndexDocument(index)
 	if key == "" {
 		return index
 	}
@@ -130,6 +139,14 @@ func (h *WebsiteHandler) resolveWebsiteKey(key, index string) string {
 		return key + index
 	}
 	return key
+}
+
+func websiteIndexDocument(index string) string {
+	index = strings.TrimSpace(index)
+	if index == "" {
+		return "index.html"
+	}
+	return index
 }
 
 func (h *WebsiteHandler) lookupObject(r *http.Request, bucket, key string) (metadata.ObjectVersion, error) {
@@ -143,8 +160,18 @@ func (h *WebsiteHandler) lookupObject(r *http.Request, bucket, key string) (meta
 	if strings.HasSuffix(key, "/") {
 		return metadata.ObjectVersion{}, err
 	}
-	// directory-style fallback
-	return h.store.GetLatestObjectVersion(r.Context(), bucket, key+"/index.html")
+	return metadata.ObjectVersion{}, err
+}
+
+func (h *WebsiteHandler) redirectToDirectoryPath(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.EscapedPath() + "/"
+	if target == "" {
+		target = "/"
+	}
+	if raw := r.URL.RawQuery; raw != "" {
+		target += "?" + raw
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (h *WebsiteHandler) writeObject(w http.ResponseWriter, r *http.Request, key string, obj metadata.ObjectVersion, status int) {
@@ -169,7 +196,8 @@ func (h *WebsiteHandler) writeObject(w http.ResponseWriter, r *http.Request, key
 		return
 	}
 	meta := blob.ObjectMeta{Ref: blob.ObjectRef{Bucket: obj.Bucket, Key: obj.Key, VersionID: obj.VersionID}, Path: obj.StoragePath, Size: obj.Size, SHA256: obj.ChecksumSHA256, MD5Hex: obj.ETag, CreatedAt: obj.CreatedAt}
-	_, _ = h.blob.ReadObject(r.Context(), meta, nil, w)
+	reader := &s3API{blob: h.blob, sseKey: h.sseKey}
+	_, _ = reader.readMaybeEncryptedObject(r, meta, obj, nil, w)
 }
 
 func (h *WebsiteHandler) redirectURL(r *http.Request, cfg metadata.BucketWebsiteConfig) string {

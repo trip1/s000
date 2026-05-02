@@ -129,7 +129,10 @@ func ImportDirectory(ctx context.Context, opts ImportOptions) (ImportResult, err
 				VersionID:      "null",
 				Size:           meta.Size,
 				ETag:           meta.MD5Hex,
-				ChecksumSHA256: meta.SHA256,
+				ChecksumSHA256: meta.SHA256B64,
+				ChecksumSHA1:   meta.SHA1B64,
+				ChecksumCRC32:  meta.CRC32B64,
+				ChecksumCRC32C: meta.CRC32CB64,
 				StoragePath:    meta.Path,
 				Metadata: map[string]string{
 					"content-type": contentTypeForPath(key),

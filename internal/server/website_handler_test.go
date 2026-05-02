@@ -57,6 +57,41 @@ func TestWebsiteHandlerPathStyleFallback(t *testing.T) {
 	}
 }
 
+func TestWebsiteHandlerRedirectsDirectoryPathToTrailingSlash(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newWebsiteFixture(t)
+
+	req := httptest.NewRequest(http.MethodGet, "http://site.website.local/dir?ref=nav", nil)
+	req.Host = "site.website.local"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("expected directory redirect status 302, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/dir/?ref=nav" {
+		t.Fatalf("unexpected redirect location %q", loc)
+	}
+}
+
+func TestWebsiteHandlerDoesNotRedirectExistingObjectWithoutSlash(t *testing.T) {
+	t.Parallel()
+
+	h, store := newWebsiteFixture(t)
+	seedWebsiteObject(t, context.Background(), store, h.(*WebsiteHandler).blob, "site", "docs", "plain object", time.Now().UTC())
+
+	req := httptest.NewRequest(http.MethodGet, "http://site.website.local/docs", nil)
+	req.Host = "site.website.local"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected existing object status 200, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); body != "plain object" {
+		t.Fatalf("expected existing object body, got %q", body)
+	}
+}
+
 func TestWebsiteHandlerRedirectAllRequests(t *testing.T) {
 	t.Parallel()
 

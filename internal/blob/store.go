@@ -3,10 +3,13 @@ package blob
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -55,6 +58,10 @@ type ObjectMeta struct {
 	Size      int64
 	MD5Hex    string
 	SHA256    string
+	SHA256B64 string
+	SHA1B64   string
+	CRC32B64  string
+	CRC32CB64 string
 	CreatedAt time.Time
 }
 
@@ -72,6 +79,10 @@ type MultipartPartMeta struct {
 	Size       int64
 	MD5Hex     string
 	SHA256     string
+	SHA256B64  string
+	SHA1B64    string
+	CRC32B64   string
+	CRC32CB64  string
 	CreatedAt  time.Time
 }
 
@@ -177,8 +188,11 @@ func (s *Store) WriteObject(ctx context.Context, ref ObjectRef, src io.Reader) (
 	}
 
 	h := sha256.New()
+	hSHA1 := sha1.New()
 	hMD5 := md5.New()
-	w := io.MultiWriter(tmpFile, h, hMD5)
+	hCRC32 := crc32.NewIEEE()
+	hCRC32C := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	w := io.MultiWriter(tmpFile, h, hSHA1, hMD5, hCRC32, hCRC32C)
 	bp := s.bufPool.Get().(*[]byte)
 	buf := *bp
 	written, err := io.CopyBuffer(w, &contextReader{ctx: ctx, src: src}, buf)
@@ -216,6 +230,10 @@ func (s *Store) WriteObject(ctx context.Context, ref ObjectRef, src io.Reader) (
 		Size:      written,
 		MD5Hex:    digestHashHex(hMD5),
 		SHA256:    digestHashHex(h),
+		SHA256B64: digestHashBase64(h),
+		SHA1B64:   digestHashBase64(hSHA1),
+		CRC32B64:  digestHashBase64(hCRC32),
+		CRC32CB64: digestHashBase64(hCRC32C),
 		CreatedAt: s.now(),
 	}, nil
 }
@@ -314,10 +332,13 @@ func (s *Store) WriteMultipartPart(ctx context.Context, uploadID string, partNum
 	}
 
 	hSHA := sha256.New()
+	hSHA1 := sha1.New()
 	hMD5 := md5.New()
+	hCRC32 := crc32.NewIEEE()
+	hCRC32C := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	bp := s.bufPool.Get().(*[]byte)
 	buf := *bp
-	written, err := io.CopyBuffer(io.MultiWriter(tmpFile, hSHA, hMD5), &contextReader{ctx: ctx, src: src}, buf)
+	written, err := io.CopyBuffer(io.MultiWriter(tmpFile, hSHA, hSHA1, hMD5, hCRC32, hCRC32C), &contextReader{ctx: ctx, src: src}, buf)
 	s.bufPool.Put(bp)
 	if err != nil {
 		cleanup()
@@ -348,12 +369,23 @@ func (s *Store) WriteMultipartPart(ctx context.Context, uploadID string, partNum
 		Size:       written,
 		MD5Hex:     digestHashHex(hMD5),
 		SHA256:     digestHashHex(hSHA),
+		SHA256B64:  digestHashBase64(hSHA),
+		SHA1B64:    digestHashBase64(hSHA1),
+		CRC32B64:   digestHashBase64(hCRC32),
+		CRC32CB64:  digestHashBase64(hCRC32C),
 		CreatedAt:  s.now(),
 	}, nil
 }
 
 // CompleteMultipartUpload assembles parts in order into destination object.
 func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string, partNumbers []int, dst ObjectRef) (ObjectMeta, error) {
+	return s.CompleteMultipartUploadWithWriter(ctx, uploadID, partNumbers, func(src io.Reader) (ObjectMeta, error) {
+		return s.WriteObject(ctx, dst, src)
+	})
+}
+
+// CompleteMultipartUploadWithWriter assembles parts and lets the caller write the final object.
+func (s *Store) CompleteMultipartUploadWithWriter(ctx context.Context, uploadID string, partNumbers []int, write func(io.Reader) (ObjectMeta, error)) (ObjectMeta, error) {
 	if len(partNumbers) == 0 {
 		return ObjectMeta{}, fmt.Errorf("at least one part is required")
 	}
@@ -377,7 +409,7 @@ func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string, pa
 		}
 	}()
 
-	meta, err := s.WriteObject(ctx, dst, io.MultiReader(readers...))
+	meta, err := write(io.MultiReader(readers...))
 	if err != nil {
 		return ObjectMeta{}, err
 	}
@@ -385,6 +417,28 @@ func (s *Store) CompleteMultipartUpload(ctx context.Context, uploadID string, pa
 		return ObjectMeta{}, err
 	}
 	return meta, nil
+}
+
+// PromoteMultipartPart atomically promotes one already-uploaded part to a complete object.
+func (s *Store) PromoteMultipartPart(_ context.Context, uploadID string, partNumber int, dst ObjectRef, part MultipartPartMeta) (ObjectMeta, error) {
+	srcPath := s.multipartPartPath(uploadID, partNumber)
+	finalPath := s.ObjectPath(dst)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
+		return ObjectMeta{}, fmt.Errorf("create object directory: %w", err)
+	}
+	if err := os.Rename(srcPath, finalPath); err != nil {
+		return ObjectMeta{}, fmt.Errorf("promote multipart part: %w", err)
+	}
+	if err := s.syncParentDir(finalPath); err != nil {
+		return ObjectMeta{}, fmt.Errorf("sync promoted object directory: %w", err)
+	}
+	if err := os.RemoveAll(s.multipartUploadDir(uploadID)); err != nil {
+		return ObjectMeta{}, fmt.Errorf("remove multipart upload staging: %w", err)
+	}
+	if part.CreatedAt.IsZero() {
+		part.CreatedAt = s.now()
+	}
+	return ObjectMeta{Ref: dst, Path: finalPath, Size: part.Size, MD5Hex: part.MD5Hex, SHA256: part.SHA256, SHA256B64: part.SHA256B64, SHA1B64: part.SHA1B64, CRC32B64: part.CRC32B64, CRC32CB64: part.CRC32CB64, CreatedAt: part.CreatedAt}, nil
 }
 
 // AbortMultipartUpload removes multipart staging for one upload.
@@ -527,4 +581,8 @@ func digestHex(s string) string {
 
 func digestHashHex(h hash.Hash) string {
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func digestHashBase64(h hash.Hash) string {
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }

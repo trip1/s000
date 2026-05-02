@@ -138,6 +138,7 @@ export S000_TLS_KEY_FILE=/etc/s000/tls.key
 | `S000_ADMIN_ACCESS_KEY` | (required) | Bootstrap admin access key |
 | `S000_ADMIN_SECRET_KEY` | (required) | Bootstrap admin secret key |
 | `S000_PAT_SIGNING_KEY` | (fallback to `S000_ADMIN_SECRET_KEY`) | Signing key for personal access tokens |
+| `S000_SSE_MASTER_KEY` | (none) | Base64-encoded 32-byte key required for SSE-S3 `AES256` writes |
 | `S000_UI_THEME` | `sysadmin90` | Default embedded UI theme |
 | `S000_UI_SSE_DASHBOARD_STATS_INTERVAL` | `2s` | Dashboard API stats SSE refresh interval |
 | `S000_UI_SSE_BUCKETS_INTERVAL` | `10s` | Buckets page table SSE refresh interval |

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS multipart_uploads (
   upload_id TEXT PRIMARY KEY,
   bucket TEXT NOT NULL,
   object_key TEXT NOT NULL,
+  sse_algorithm TEXT NOT NULL DEFAULT '',
   initiated_at TEXT NOT NULL
 );
 
@@ -41,6 +42,9 @@ CREATE TABLE IF NOT EXISTS multipart_parts (
   etag TEXT NOT NULL,
   size INTEGER NOT NULL,
   checksum_sha256 TEXT NOT NULL,
+  checksum_sha1 TEXT NOT NULL DEFAULT '',
+  checksum_crc32 TEXT NOT NULL DEFAULT '',
+  checksum_crc32c TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (upload_id, part_number)
 );
 
@@ -84,6 +88,18 @@ CREATE TABLE IF NOT EXISTS bucket_public_access_blocks (
   ignore_public_acls INTEGER NOT NULL,
   block_public_policy INTEGER NOT NULL,
   restrict_public_buckets INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_notifications (
+  bucket TEXT PRIMARY KEY,
+  document TEXT NOT NULL,
+  enabled INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_replications (
+  bucket TEXT PRIMARY KEY,
+  document TEXT NOT NULL,
+  enabled INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_object_versions_bucket_key ON object_versions(bucket, object_key);
@@ -130,6 +146,7 @@ CREATE TABLE IF NOT EXISTS multipart_uploads (
   upload_id TEXT PRIMARY KEY,
   bucket TEXT NOT NULL,
   object_key TEXT NOT NULL,
+  sse_algorithm TEXT NOT NULL DEFAULT '',
   initiated_at TIMESTAMPTZ NOT NULL
 );
 
@@ -139,6 +156,9 @@ CREATE TABLE IF NOT EXISTS multipart_parts (
   etag TEXT NOT NULL,
   size BIGINT NOT NULL,
   checksum_sha256 TEXT NOT NULL,
+  checksum_sha1 TEXT NOT NULL DEFAULT '',
+  checksum_crc32 TEXT NOT NULL DEFAULT '',
+  checksum_crc32c TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (upload_id, part_number)
 );
 
@@ -182,6 +202,18 @@ CREATE TABLE IF NOT EXISTS bucket_public_access_blocks (
   ignore_public_acls BOOLEAN NOT NULL,
   block_public_policy BOOLEAN NOT NULL,
   restrict_public_buckets BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_notifications (
+  bucket TEXT PRIMARY KEY,
+  document TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_replications (
+  bucket TEXT PRIMARY KEY,
+  document TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_object_versions_bucket_key ON object_versions(bucket, object_key);
@@ -228,6 +260,7 @@ CREATE TABLE IF NOT EXISTS multipart_uploads (
   upload_id VARCHAR(255) PRIMARY KEY,
   bucket VARCHAR(255) NOT NULL,
   object_key VARCHAR(1024) NOT NULL,
+  sse_algorithm VARCHAR(32) NOT NULL DEFAULT '',
   initiated_at DATETIME(6) NOT NULL
 );
 
@@ -237,6 +270,9 @@ CREATE TABLE IF NOT EXISTS multipart_parts (
   etag VARCHAR(255) NOT NULL,
   size BIGINT NOT NULL,
   checksum_sha256 VARCHAR(128) NOT NULL,
+  checksum_sha1 VARCHAR(128) NOT NULL DEFAULT '',
+  checksum_crc32 VARCHAR(128) NOT NULL DEFAULT '',
+  checksum_crc32c VARCHAR(128) NOT NULL DEFAULT '',
   PRIMARY KEY (upload_id, part_number)
 );
 
@@ -280,6 +316,18 @@ CREATE TABLE IF NOT EXISTS bucket_public_access_blocks (
   ignore_public_acls TINYINT(1) NOT NULL,
   block_public_policy TINYINT(1) NOT NULL,
   restrict_public_buckets TINYINT(1) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_notifications (
+  bucket VARCHAR(255) PRIMARY KEY,
+  document LONGTEXT NOT NULL,
+  enabled TINYINT(1) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bucket_replications (
+  bucket VARCHAR(255) PRIMARY KEY,
+  document LONGTEXT NOT NULL,
+  enabled TINYINT(1) NOT NULL
 );
 
 CREATE INDEX idx_object_versions_bucket_key ON object_versions(bucket, object_key(255));

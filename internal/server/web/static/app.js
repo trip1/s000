@@ -229,13 +229,14 @@
       })
     }
 
-    function walkEntry(entry) {
+    function walkEntry(entry, parentPath) {
       if (!entry) return Promise.resolve([])
+      var currentPath = normalizePath(parentPath ? parentPath + "/" + entry.name : entry.name)
       if (entry.isFile) {
         return new Promise(function (resolve) {
           entry.file(
             function (file) {
-              var rel = normalizePath(entry.fullPath || file.webkitRelativePath || file.name)
+              var rel = currentPath || normalizePath(entry.fullPath || file.webkitRelativePath || file.name)
               resolve([{ file: file, path: rel || file.name }])
             },
             function () {
@@ -249,7 +250,7 @@
         if (!children.length) return []
         var tasks = []
         for (var i = 0; i < children.length; i++) {
-          tasks.push(walkEntry(children[i]))
+          tasks.push(walkEntry(children[i], currentPath))
         }
         return Promise.all(tasks).then(function (groups) {
           var flattened = []
@@ -265,10 +266,12 @@
 
     function collectDroppedItems(dataTransfer) {
       if (!dataTransfer) return Promise.resolve([])
-      if (dataTransfer.items && dataTransfer.items.length && dataTransfer.items[0].webkitGetAsEntry) {
+      if (dataTransfer.items && dataTransfer.items.length) {
         var tasks = []
         for (var i = 0; i < dataTransfer.items.length; i++) {
-          var entry = dataTransfer.items[i].webkitGetAsEntry()
+          var getEntry = dataTransfer.items[i].webkitGetAsEntry || dataTransfer.items[i].getAsEntry
+          if (!getEntry) continue
+          var entry = getEntry.call(dataTransfer.items[i])
           if (!entry) continue
           tasks.push(walkEntry(entry))
         }
